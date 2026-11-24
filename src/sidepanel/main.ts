@@ -28,11 +28,14 @@ import {
   exportEntryToMarkdown,
   searchKnowledgeBase,
 } from '../shared/kb-storage';
+import type { QueueJob } from '../shared/types';
 import {
   addUniqueTopic,
   evaluateChapterRelevance,
   extractTopicFromChapter,
   removeTopic,
+  toggleChapterCare,
+  toggleChapterIgnore,
 } from '../shared/interests';
 import { parseGithubRepo } from '../shared/github-sync';
 
@@ -170,6 +173,7 @@ function getWatchingRenderSignature(): string {
     settings.chapterFilterMode,
     settings.topicsIgnore.join(','),
     settings.topicsCare.join(','),
+    (settings.topicsAllow ?? []).join(','),
     settings.autoSkipIgnoredChapters ? 1 : 0,
     settings.hideIgnoredChapters ? 1 : 0,
     chapterSearch,
@@ -403,31 +407,47 @@ function renderWatchingTab() {
       careBtn.type = 'button';
       careBtn.className = `fb-btn${rel.relevance === 'must_watch' ? ' is-active-care' : ''}`;
       careBtn.textContent = '★';
-      careBtn.title = 'I care about this topic';
+      careBtn.title =
+        rel.relevance === 'must_watch' ? 'Remove from Topics I Care About' : 'I care about this topic';
       careBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const topic = extractTopicFromChapter(ch);
+        const res = toggleChapterCare(ch, settings);
         void saveInterestUpdate({
-          topicsCare: addUniqueTopic(settings.topicsCare, topic),
-          topicsIgnore: removeTopic(settings.topicsIgnore, topic),
+          topicsCare: res.topicsCare,
+          topicsIgnore: res.topicsIgnore,
+          topicsAllow: res.topicsAllow,
         }).then(() => {
-          showBanner(`Added "${topic}" to Topics I Care About`, 'success');
+          showBanner(
+            res.action === 'cared'
+              ? `Added "${res.topic}" to Topics I Care About`
+              : `Removed "${res.topic}" from Topics I Care About`,
+            'success'
+          );
         });
       });
 
       const skipBtn = document.createElement('button');
       skipBtn.type = 'button';
       skipBtn.className = `fb-btn${rel.relevance === 'skip' ? ' is-active-skip' : ''}`;
-      skipBtn.textContent = '⊘';
-      skipBtn.title = "Don't care — auto-skip this topic in future videos too";
+      skipBtn.textContent = rel.relevance === 'skip' ? '↩' : '⊘';
+      skipBtn.title =
+        rel.relevance === 'skip'
+          ? 'Un-ignore this topic (stop auto-skipping)'
+          : "Don't care — auto-skip this topic in future videos too";
       skipBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const topic = extractTopicFromChapter(ch);
+        const res = toggleChapterIgnore(ch, settings);
         void saveInterestUpdate({
-          topicsIgnore: addUniqueTopic(settings.topicsIgnore, topic),
-          topicsCare: removeTopic(settings.topicsCare, topic),
+          topicsIgnore: res.topicsIgnore,
+          topicsCare: res.topicsCare,
+          topicsAllow: res.topicsAllow,
         }).then(() => {
-          showBanner(`Added "${topic}" to Don't Care list — auto-skipping!`, 'success');
+          showBanner(
+            res.action === 'ignored'
+              ? `Added "${res.topic}" to Don't Care list — auto-skipping!`
+              : `Un-ignored "${res.topic}" — no longer skipping`,
+            'success'
+          );
         });
       });
 
@@ -1468,6 +1488,40 @@ function bindEvents() {
     showBanner('Settings saved!', 'success');
   });
 
+  document.getElementById('queue-clear-done-btn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    void sendMessage<{ jobs: QueueJob[] }>({ type: 'QUEUE_CLEAR_DONE' }).then((res) => {
+      queueJobs = res.jobs ?? [];
+      renderQueueCard();
+    });
+  });
+
+  document.getElementById('queue-add-btn')?.addEventListener('click', async () => {
+    const input = document.getElementById('queue-url-input') as HTMLInputElement | null;
+    const raw = input?.value.trim() ?? '';
+    if (!raw) return;
+    const res = await sendMessage<{ ok: boolean; jobs: QueueJob[] }>({
+      type: 'QUEUE_ADD',
+      urlOrId: raw,
+    });
+    if (!res.ok) {
+      showBanner('Could not recognize a valid YouTube URL or 11-char video ID.', 'error');
+      return;
+    }
+    if (input) input.value = '';
+    queueJobs = res.jobs ?? [];
+    renderQueueCard();
+    showBanner('Queued video for headless background analysis!', 'success');
+  });
+
+  document.getElementById('queue-url-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('queue-add-btn')?.click();
+    }
+  });
+
   document.getElementById('save-gh-settings-btn')?.addEventListener('click', async () => {
     const partial = collectSettingsFromForm();
     const res = await sendMessage<{ settings: ExtensionSettings }>({
@@ -1540,6 +1594,11 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
       renderWatchingTab();
       renderTranscriptTab();
     }
+  } else if (msg.type === 'SETTINGS_UPDATED') {
+    settings = msg.settings;
+    renderWatchingTab();
+    renderTranscriptTab();
+    renderSettingsInterestChips();
   } else if (msg.type === 'BRIDGE_ANALYSIS_READY') {
     if (videoState?.meta?.videoId === msg.entry.videoId) {
       videoState.kbEntry = msg.entry;
@@ -1558,8 +1617,142 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
       ansBox.textContent = msg.answer;
     }
     showBanner('Captured answer from your AI subscription!', 'success');
+  } else if (msg.type === 'QUEUE_UPDATED') {
+    queueJobs = msg.jobs;
+    renderQueueCard();
+    if (queueJobs.some((j) => j.status === 'done')) {
+      void loadKb();
+    }
   }
 });
+
+let queueJobs: QueueJob[] = [];
+
+function formatQueueStatusLabel(job: QueueJob): { label: string; cls: string } {
+  if (job.status === 'queued') return { label: 'Queued', cls: 'is-running' };
+  if (job.status === 'fetching_transcript') return { label: 'Extracting captions…', cls: 'is-running' };
+  if (job.status === 'analyzing') return { label: 'Analyzing AI…', cls: 'is-running' };
+  if (job.status === 'done') {
+    const ch = job.chapterCount ?? 0;
+    const ent = job.entityCount ?? 0;
+    return { label: `✓ ${ch} ch · ${ent} ent`, cls: 'is-done' };
+  }
+  return { label: 'Failed', cls: 'is-error' };
+}
+
+function renderQueueCard() {
+  const card = document.getElementById('queue-card') as HTMLDetailsElement | null;
+  const badge = document.getElementById('queue-summary-badge');
+  const list = document.getElementById('queue-list');
+  if (!card || !badge || !list) return;
+
+  if (queueJobs.length === 0) {
+    card.classList.add('hidden');
+    badge.textContent = '0';
+    list.innerHTML = '';
+    return;
+  }
+
+  card.classList.remove('hidden');
+  const activeCount = queueJobs.filter(
+    (j) => j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing'
+  ).length;
+  if (activeCount > 0) {
+    card.open = true;
+  }
+  badge.textContent = activeCount > 0 ? `${activeCount} active` : `${queueJobs.length}`;
+
+  list.innerHTML = '';
+  for (const job of queueJobs) {
+    const item = document.createElement('div');
+    item.className = 'queue-item';
+
+    const head = document.createElement('div');
+    head.className = 'queue-item-head';
+
+    const title = document.createElement('span');
+    title.className = 'queue-item-title';
+    title.textContent = job.title || job.videoId;
+    title.title = job.title || job.videoId;
+
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button';
+    rmBtn.className = 'btn btn-ghost btn-xs';
+    rmBtn.textContent = '✕';
+    rmBtn.title = 'Remove from queue';
+    rmBtn.addEventListener('click', () => {
+      void sendMessage<{ jobs: QueueJob[] }>({
+        type: 'QUEUE_REMOVE',
+        videoId: job.videoId,
+      }).then((res) => {
+        queueJobs = res.jobs ?? [];
+        renderQueueCard();
+      });
+    });
+
+    head.append(title, rmBtn);
+
+    const meta = document.createElement('div');
+    meta.className = 'queue-item-meta';
+
+    const statusInfo = formatQueueStatusLabel(job);
+    const pill = document.createElement('span');
+    pill.className = `queue-badge ${statusInfo.cls}`;
+    pill.textContent = statusInfo.label;
+    if (job.error) pill.title = job.error;
+
+    const actions = document.createElement('span');
+    if (job.status === 'error') {
+      const retryBtn = document.createElement('button');
+      retryBtn.type = 'button';
+      retryBtn.className = 'btn btn-ghost btn-xs';
+      retryBtn.textContent = 'Retry';
+      retryBtn.addEventListener('click', () => {
+        void sendMessage<{ jobs: QueueJob[] }>({
+          type: 'QUEUE_ADD',
+          urlOrId: job.videoId,
+          title: job.title,
+          channelName: job.channelName,
+        }).then((res) => {
+          queueJobs = res.jobs ?? [];
+          renderQueueCard();
+        });
+      });
+      actions.appendChild(retryBtn);
+    } else if (job.status === 'done') {
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'btn btn-ghost btn-xs';
+      openBtn.textContent = 'Open ↗';
+      openBtn.addEventListener('click', () => {
+        void chrome.tabs.create({ url: job.url, active: true });
+      });
+      actions.appendChild(openBtn);
+    } else if (job.channelName) {
+      actions.textContent = job.channelName;
+    }
+
+    meta.append(pill, actions);
+    item.append(head, meta);
+    if (job.error) {
+      const errEl = document.createElement('div');
+      errEl.className = 'muted-small';
+      errEl.textContent = job.error;
+      item.appendChild(errEl);
+    }
+    list.appendChild(item);
+  }
+}
+
+async function loadQueue() {
+  try {
+    const res = await sendMessage<{ jobs?: QueueJob[] }>({ type: 'QUEUE_LIST' });
+    queueJobs = res.jobs ?? [];
+    renderQueueCard();
+  } catch {
+    // ignore
+  }
+}
 
 chrome.tabs.onActivated.addListener(() => void syncActiveYouTubeTab());
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -1573,7 +1766,7 @@ async function init() {
   const res = await sendMessage<{ settings: ExtensionSettings }>({ type: 'SETTINGS_GET' });
   settings = res.settings;
   renderSettingsTab();
-  await Promise.all([syncActiveYouTubeTab(), loadKb()]);
+  await Promise.all([syncActiveYouTubeTab(), loadKb(), loadQueue()]);
 }
 
 void init();

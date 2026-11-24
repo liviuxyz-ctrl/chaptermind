@@ -3,11 +3,13 @@ import type {
   Chapter,
   ExtensionSettings,
   KnowledgeEntry,
+  QueueJob,
   RuntimeMessage,
   SponsorSegment,
   TranscriptCue,
   VideoMetadata,
 } from '../shared/types';
+import { extractYouTubeVideoId } from '../shared/youtube-url';
 import { DEFAULT_SETTINGS } from '../shared/types';
 import {
   CATEGORY_COLORS,
@@ -20,7 +22,12 @@ import {
   getAdjacentChapter,
   mergeChapters,
 } from '../shared/chapters';
-import { evaluateChapterRelevance } from '../shared/interests';
+import {
+  addUniqueTopic,
+  evaluateChapterRelevance,
+  removeTopic,
+  toggleChapterIgnore,
+} from '../shared/interests';
 
 const state: ActiveVideoState = {
   meta: null,
@@ -44,6 +51,7 @@ let activeMutedUuid: string | null = null;
 let hudHost: HTMLElement | null = null;
 let hudShadow: ShadowRoot | null = null;
 let stripCollapsed = false;
+let filtersExpanded = false;
 let toastTimer: number | null = null;
 let lastBroadcastTime = 0;
 
@@ -576,6 +584,8 @@ function renderInPageStrip() {
     .cm-btn:hover { background: #3f3f3f; }
     .cm-btn-highlight { color: #f472b6; }
     .cm-btn-panel { color: #7dd3fc; }
+    .cm-btn-on { color: #6ee7b7; border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.12); }
+    .cm-btn-off { color: #a1a1aa; }
     .cm-sb-badge {
       font-size: 11px;
       font-weight: 500;
@@ -583,6 +593,39 @@ function renderInPageStrip() {
       background: rgba(16, 185, 129, 0.1);
       border-radius: 999px;
       padding: 2px 8px;
+    }
+    .cm-filters-row {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 8px;
+      background: #171717;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+    }
+    .cm-filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(249, 115, 22, 0.14);
+      border: 1px solid rgba(249, 115, 22, 0.38);
+      color: #fdba74;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .cm-filter-chip:hover { background: rgba(249, 115, 22, 0.25); }
+    .cm-filter-input {
+      background: #0f0f0f;
+      color: #f1f1f1;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 999px;
+      padding: 3px 10px;
+      font-size: 11px;
+      outline: none;
+      width: 190px;
     }
     .cm-pills {
       display: flex;
@@ -592,36 +635,67 @@ function renderInPageStrip() {
       padding-bottom: 2px;
       scrollbar-width: thin;
     }
-    .cm-pill {
+    .cm-pill-wrap {
       flex-shrink: 0;
+      display: inline-flex;
+      align-items: stretch;
+      background: #212121;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .cm-pill-wrap:hover { background: #2c2c2c; }
+    .cm-pill-wrap.active {
+      background: #f1f1f1;
+      border-color: #f1f1f1;
+    }
+    .cm-pill-wrap.is-care {
+      border-color: rgba(16, 185, 129, 0.45);
+    }
+    .cm-pill-wrap.is-skip {
+      opacity: 0.55;
+      border-color: rgba(249, 115, 22, 0.4);
+    }
+    .cm-pill {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      background: #212121;
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: transparent;
+      border: none;
       color: #d4d4d8;
-      border-radius: 8px;
-      padding: 5px 10px;
+      padding: 5px 7px 5px 9px;
       font-size: 12px;
       cursor: pointer;
       white-space: nowrap;
     }
-    .cm-pill:hover { background: #303030; color: #ffffff; }
-    .cm-pill.active {
-      background: #f1f1f1;
-      border-color: #f1f1f1;
+    .cm-pill-wrap.active .cm-pill {
       color: #0f0f0f;
       font-weight: 600;
     }
-    .cm-pill.active .cm-pill-time {
-      color: #52525b;
-    }
-    .cm-pill.is-skip {
-      opacity: 0.45;
+    .cm-pill-wrap.is-skip .cm-pill-title {
       text-decoration: line-through;
     }
-    .cm-pill.is-care {
-      border-color: rgba(16, 185, 129, 0.45);
+    .cm-pill-wrap.active .cm-pill-time {
+      color: #52525b;
+    }
+    .cm-pill-act {
+      background: transparent;
+      border: none;
+      border-left: 1px solid rgba(255, 255, 255, 0.08);
+      color: #71717a;
+      padding: 0 7px;
+      font-size: 11px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+    }
+    .cm-pill-act:hover { color: #f4f4f5; background: rgba(255, 255, 255, 0.08); }
+    .cm-pill-wrap.active .cm-pill-act {
+      border-left-color: rgba(0, 0, 0, 0.14);
+      color: #52525b;
+    }
+    .cm-pill-wrap.is-skip .cm-pill-act {
+      color: #fdba74;
     }
     .cm-pill-time {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -712,6 +786,39 @@ function renderInPageStrip() {
     void sendRuntimeMessage({ type: 'OPEN_SIDEPANEL' }).catch(() => {});
   });
 
+  const savePartialSettings = async (partial: Partial<ExtensionSettings>) => {
+    const res = await sendRuntimeMessage<{ settings?: ExtensionSettings }>({
+      type: 'SETTINGS_SAVE',
+      settings: partial,
+    }).catch(() => ({ settings: undefined }));
+    if (res.settings) {
+      settings = res.settings;
+    } else {
+      settings = { ...settings, ...partial };
+    }
+    renderTimelineOverlay();
+    renderInPageStrip();
+  };
+
+  const autoSkipBtn = document.createElement('button');
+  autoSkipBtn.type = 'button';
+  autoSkipBtn.className = `cm-btn ${settings.autoSkipIgnoredChapters ? 'cm-btn-on' : 'cm-btn-off'}`;
+  autoSkipBtn.title = 'Toggle automatic skipping of Don’t Care chapters';
+  autoSkipBtn.textContent = settings.autoSkipIgnoredChapters ? 'Auto-Skip ON' : 'Auto-Skip OFF';
+  autoSkipBtn.addEventListener('click', () => {
+    void savePartialSettings({ autoSkipIgnoredChapters: !settings.autoSkipIgnoredChapters });
+  });
+
+  const filtersBtn = document.createElement('button');
+  filtersBtn.type = 'button';
+  filtersBtn.className = 'cm-btn';
+  filtersBtn.title = 'Show / remove Don’t Care ignore filters';
+  filtersBtn.textContent = `Filters (${settings.topicsIgnore.length})`;
+  filtersBtn.addEventListener('click', () => {
+    filtersExpanded = !filtersExpanded;
+    renderInPageStrip();
+  });
+
   const collapseBtn = document.createElement('button');
   collapseBtn.type = 'button';
   collapseBtn.className = 'cm-btn';
@@ -721,9 +828,48 @@ function renderInPageStrip() {
     renderInPageStrip();
   });
 
-  actions.append(prevBtn, nextBtn, panelBtn, collapseBtn);
+  actions.append(prevBtn, nextBtn, autoSkipBtn, filtersBtn, panelBtn, collapseBtn);
   top.append(left, actions);
   bar.appendChild(top);
+
+  if (!stripCollapsed && filtersExpanded) {
+    const filterRow = document.createElement('div');
+    filterRow.className = 'cm-filters-row';
+
+    for (const topic of settings.topicsIgnore) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'cm-filter-chip';
+      chip.title = `Remove "${topic}" from Don't Care list`;
+      chip.textContent = `${topic} ✕`;
+      chip.addEventListener('click', () => {
+        void savePartialSettings({
+          topicsIgnore: removeTopic(settings.topicsIgnore, topic),
+        });
+      });
+      filterRow.appendChild(chip);
+    }
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'cm-filter-input';
+    input.placeholder = '+ Ignore topic & Enter...';
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const val = input.value.trim();
+        if (!val) return;
+        input.value = '';
+        void savePartialSettings({
+          topicsIgnore: addUniqueTopic(settings.topicsIgnore, val),
+          topicsCare: removeTopic(settings.topicsCare, val),
+          topicsAllow: removeTopic(settings.topicsAllow, val),
+        });
+      }
+    });
+    filterRow.appendChild(input);
+    bar.appendChild(filterRow);
+  }
 
   if (!stripCollapsed) {
     if (chapters.length > 0) {
@@ -731,12 +877,15 @@ function renderInPageStrip() {
       pills.className = 'cm-pills';
       for (const ch of chapters) {
         const rel = evaluateChapterRelevance(ch, settings);
-        const pill = document.createElement('button');
-        pill.type = 'button';
-        pill.className = `cm-pill${active?.id === ch.id ? ' active' : ''}${
+        const wrap = document.createElement('div');
+        wrap.className = `cm-pill-wrap${active?.id === ch.id ? ' active' : ''}${
           rel.relevance === 'skip' ? ' is-skip' : rel.relevance === 'must_watch' ? ' is-care' : ''
         }`;
-        pill.dataset.chapterId = ch.id;
+        wrap.dataset.chapterId = ch.id;
+
+        const pill = document.createElement('button');
+        pill.type = 'button';
+        pill.className = 'cm-pill';
         pill.title = rel.reason
           ? `${ch.title} (${rel.reason})`
           : ch.summary
@@ -761,12 +910,37 @@ function renderInPageStrip() {
         time.textContent = formatTimestamp(ch.startTime);
 
         const title = document.createElement('span');
+        title.className = 'cm-pill-title';
         const prefix = rel.relevance === 'skip' ? '⊘ ' : rel.relevance === 'must_watch' ? '★ ' : '';
         title.textContent = `${prefix}${ch.title}`;
 
         pill.append(dot, time, title);
         pill.addEventListener('click', () => seekTo(ch.startTime));
-        pills.appendChild(pill);
+
+        const actBtn = document.createElement('button');
+        actBtn.type = 'button';
+        actBtn.className = 'cm-pill-act';
+        actBtn.textContent = rel.relevance === 'skip' ? '↩' : '⊘';
+        actBtn.title =
+          rel.relevance === 'skip'
+            ? 'Un-ignore this chapter (remove skip)'
+            : "Don't care — auto-skip this topic";
+        actBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const res = toggleChapterIgnore(ch, settings);
+          if (res.action === 'unignored') {
+            undoneChapterIds.add(ch.id);
+            skippedChapterIds.delete(ch.id);
+          }
+          void savePartialSettings({
+            topicsIgnore: res.topicsIgnore,
+            topicsCare: res.topicsCare,
+            topicsAllow: res.topicsAllow,
+          });
+        });
+
+        wrap.append(pill, actBtn);
+        pills.appendChild(wrap);
       }
       bar.appendChild(pills);
     } else {
@@ -792,7 +966,7 @@ function renderInPageStripActiveOnly() {
     const idx = chapters.findIndex((c) => c.id === active.id) + 1;
     activeTitle.textContent = `${idx}/${chapters.length} · ${active.title}`;
   }
-  const pills = hudShadow.querySelectorAll('.cm-pill');
+  const pills = hudShadow.querySelectorAll('.cm-pill-wrap');
   pills.forEach((pill) => {
     const id = (pill as HTMLElement).dataset.chapterId;
     pill.classList.toggle('active', Boolean(active && id === active.id));
@@ -835,6 +1009,10 @@ async function loadVideoContext(videoId: string) {
     '*'
   );
 
+  if (IS_HEADLESS_TAB) {
+    return;
+  }
+
   // Fetch SponsorBlock + saved Knowledge Base entry in parallel from background
   const [sbRes, kbRes] = await Promise.all([
     sendRuntimeMessage<{ segments?: SponsorSegment[] }>({
@@ -860,8 +1038,20 @@ async function loadVideoContext(videoId: string) {
 
 function attachVideoListeners() {
   const video = getVideoElement();
-  if (!video || video.dataset.chaptermindBound === '1') return;
+  if (!video) return;
+  if (IS_HEADLESS_TAB) {
+    video.muted = true;
+    if (!video.paused) video.pause();
+  }
+  if (video.dataset.chaptermindBound === '1') return;
   video.dataset.chaptermindBound = '1';
+  if (IS_HEADLESS_TAB) {
+    video.addEventListener('play', () => {
+      video.muted = true;
+      video.pause();
+    });
+    return;
+  }
   video.addEventListener('timeupdate', handlePlaybackTick);
   video.addEventListener('seeked', () => {
     handlePlaybackTick();
@@ -894,6 +1084,10 @@ window.addEventListener('message', (event) => {
     if (payload.meta && payload.meta.videoId === currentVideoId) {
       state.meta = payload.meta;
       state.youtubeChapters = payload.youtubeChapters ?? [];
+      if (IS_HEADLESS_TAB) {
+        maybeReportHeadlessCapture();
+        return;
+      }
       renderTimelineOverlay();
       renderInPageStrip();
       broadcastStateToPanel(true);
@@ -909,6 +1103,10 @@ window.addEventListener('message', (event) => {
       state.transcriptStatus =
         state.transcript.length > 0 ? 'ready' : payload.error ? 'unavailable' : 'unavailable';
       state.transcriptError = payload.error;
+      if (IS_HEADLESS_TAB) {
+        maybeReportHeadlessCapture();
+        return;
+      }
       renderInPageStrip();
       broadcastStateToPanel(true);
     }
@@ -970,8 +1168,25 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, _sender, sendResponse
 
   if (msg.type === 'SETTINGS_UPDATED') {
     settings = msg.settings;
-    renderTimelineOverlay();
-    renderInPageStrip();
+    if (!IS_HEADLESS_TAB) {
+      renderTimelineOverlay();
+      renderInPageStrip();
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (msg.type === 'QUEUE_UPDATED') {
+    queueJobsById.clear();
+    for (const job of msg.jobs) {
+      queueJobsById.set(job.videoId, job);
+    }
+    if (msg.kbVideoIds) {
+      kbVideoIds = new Set(msg.kbVideoIds);
+    }
+    if (!IS_HEADLESS_TAB) {
+      refreshAllThumbnailQueueButtons();
+    }
     sendResponse({ ok: true });
     return false;
   }
@@ -1022,6 +1237,186 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+const IS_HEADLESS_TAB = new URLSearchParams(window.location.search).get('cm_headless') === '1';
+const queueJobsById = new Map<string, QueueJob>();
+let kbVideoIds = new Set<string>();
+let headlessReportedVideoId: string | null = null;
+let thumbScanTimer: number | null = null;
+
+function maybeReportHeadlessCapture() {
+  if (!IS_HEADLESS_TAB || !currentVideoId) return;
+  if (headlessReportedVideoId === currentVideoId) return;
+  if (state.transcriptStatus === 'loading') return;
+  headlessReportedVideoId = currentVideoId;
+  void sendRuntimeMessage({
+    type: 'HEADLESS_TRANSCRIPT_CAPTURED',
+    videoId: currentVideoId,
+    meta: state.meta,
+    transcript: state.transcript,
+    youtubeChapters: state.youtubeChapters,
+    error: state.transcriptError,
+  }).catch(() => {});
+}
+
+function ensureThumbQueueStyles() {
+  if (document.getElementById('cm-thumb-btn-style')) return;
+  const style = document.createElement('style');
+  style.id = 'cm-thumb-btn-style';
+  style.textContent = `
+    .cm-thumb-queue-btn {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 25;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 7px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(9, 9, 11, 0.84);
+      backdrop-filter: blur(6px);
+      color: #e4e4e7;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.2;
+      cursor: pointer;
+      opacity: 0.9;
+      transition: opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+    }
+    .cm-thumb-queue-btn:hover {
+      opacity: 1;
+      background: rgba(24, 24, 27, 0.96);
+      border-color: rgba(56, 189, 248, 0.65);
+      color: #ffffff;
+    }
+    .cm-thumb-queue-btn.is-queued {
+      border-color: rgba(245, 158, 11, 0.55);
+      color: #fbbf24;
+    }
+    .cm-thumb-queue-btn.is-done {
+      border-color: rgba(16, 185, 129, 0.55);
+      color: #34d399;
+    }
+    .cm-thumb-queue-btn.is-error {
+      border-color: rgba(244, 63, 94, 0.55);
+      color: #fda4af;
+    }
+  `;
+  (document.head || document.documentElement).appendChild(style);
+}
+
+function applyThumbButtonState(btn: HTMLButtonElement, videoId: string) {
+  const job = queueJobsById.get(videoId);
+  btn.classList.remove('is-queued', 'is-done', 'is-error');
+  if (job) {
+    if (job.status === 'queued' || job.status === 'fetching_transcript' || job.status === 'analyzing') {
+      btn.classList.add('is-queued');
+      btn.textContent = job.status === 'analyzing' ? '⏳ AI' : '⏳ Queue';
+      btn.title = `ChapterMind: ${job.status.replace('_', ' ')}...`;
+      return;
+    }
+    if (job.status === 'done') {
+      btn.classList.add('is-done');
+      btn.textContent = '✓ KB';
+      btn.title = 'ChapterMind: Saved in Knowledge Base (click to re-run headlessly)';
+      return;
+    }
+    if (job.status === 'error') {
+      btn.classList.add('is-error');
+      btn.textContent = '! Retry';
+      btn.title = `ChapterMind failed: ${job.error || 'Unknown error'} (click to retry)`;
+      return;
+    }
+  }
+  if (kbVideoIds.has(videoId)) {
+    btn.classList.add('is-done');
+    btn.textContent = '✓ KB';
+    btn.title = 'ChapterMind: Saved in Knowledge Base (click to re-run headlessly)';
+    return;
+  }
+  btn.textContent = '+ CM';
+  btn.title = 'ChapterMind: Queue & analyze headlessly in background';
+}
+
+function refreshAllThumbnailQueueButtons() {
+  document.querySelectorAll<HTMLButtonElement>('.cm-thumb-queue-btn[data-cm-vid]').forEach((btn) => {
+    const vid = btn.dataset.cmVid;
+    if (vid) applyThumbButtonState(btn, vid);
+  });
+}
+
+function scanThumbnailQueueButtons() {
+  if (IS_HEADLESS_TAB) return;
+  ensureThumbQueueStyles();
+
+  const anchors = document.querySelectorAll<HTMLAnchorElement>(
+    'ytd-rich-item-renderer a#thumbnail[href], ytd-video-renderer a#thumbnail[href], ytd-compact-video-renderer a#thumbnail[href], ytd-grid-video-renderer a#thumbnail[href], ytd-playlist-video-renderer a#thumbnail[href], yt-lockup-view-model a.yt-lockup-view-model-wiz__content-image[href], yt-lockup-view-model a[href*="/watch"]:has(yt-thumbnail-view-model, yt-image, img)'
+  );
+
+  for (const anchor of anchors) {
+    if (anchor.querySelector('.cm-thumb-queue-btn')) continue;
+    if (anchor.closest('yt-lockup-metadata-view-model, #details, #meta')) continue;
+    if (!anchor.querySelector('img, yt-image, yt-thumbnail-view-model')) continue;
+
+    const vid = extractYouTubeVideoId(anchor.href);
+    if (!vid) continue;
+    const rect = anchor.getBoundingClientRect();
+    if (rect.width > 0 && rect.width < 90) continue;
+
+    const card = anchor.closest(
+      'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model'
+    );
+    if (card?.querySelector('.cm-thumb-queue-btn')) continue;
+
+    if (getComputedStyle(anchor).position === 'static') {
+      anchor.style.position = 'relative';
+    }
+    const titleEl = card?.querySelector('#video-title, h3 a, .yt-lockup-metadata-view-model-wiz__title');
+    const channelEl = card?.querySelector('ytd-channel-name #text, #channel-name a');
+    const title = titleEl?.textContent?.trim() || `YouTube Video (${vid})`;
+    const channelName = channelEl?.textContent?.trim() || undefined;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cm-thumb-queue-btn';
+    btn.dataset.cmVid = vid;
+    applyThumbButtonState(btn, vid);
+
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      queueJobsById.set(vid, {
+        videoId: vid,
+        url: `https://www.youtube.com/watch?v=${vid}`,
+        title,
+        channelName,
+        status: 'queued',
+        addedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      applyThumbButtonState(btn, vid);
+      void sendRuntimeMessage<{ jobs?: QueueJob[] }>({
+        type: 'QUEUE_ADD',
+        urlOrId: vid,
+        title,
+        channelName,
+      }).catch(() => {});
+    });
+
+    anchor.appendChild(btn);
+  }
+}
+
+function scheduleScanThumbnailButtons() {
+  if (IS_HEADLESS_TAB || thumbScanTimer !== null) return;
+  thumbScanTimer = window.setTimeout(() => {
+    thumbScanTimer = null;
+    scanThumbnailQueueButtons();
+  }, 350);
+}
+
 // Initialize
 void sendRuntimeMessage<{ settings?: ExtensionSettings }>({ type: 'SETTINGS_GET' })
   .then((res) => {
@@ -1030,13 +1425,37 @@ void sendRuntimeMessage<{ settings?: ExtensionSettings }>({ type: 'SETTINGS_GET'
   .catch(() => {})
   .finally(() => {
     checkNavigation();
+    if (!IS_HEADLESS_TAB) {
+      void Promise.all([
+        sendRuntimeMessage<{ jobs?: QueueJob[] }>({ type: 'QUEUE_LIST' }).catch(() => ({ jobs: [] })),
+        sendRuntimeMessage<{ ids?: string[] }>({ type: 'KB_IDS_GET' }).catch(() => ({ ids: [] })),
+      ]).then(([qRes, kbRes]) => {
+        for (const job of qRes.jobs ?? []) {
+          queueJobsById.set(job.videoId, job);
+        }
+        kbVideoIds = new Set(kbRes.ids ?? []);
+        scanThumbnailQueueButtons();
+        refreshAllThumbnailQueueButtons();
+      });
+    }
   });
 
-window.addEventListener('yt-navigate-finish', () => setTimeout(checkNavigation, 250));
-window.addEventListener('yt-page-data-updated', () => setTimeout(checkNavigation, 250));
+window.addEventListener('yt-navigate-finish', () =>
+  setTimeout(() => {
+    checkNavigation();
+    scheduleScanThumbnailButtons();
+  }, 250)
+);
+window.addEventListener('yt-page-data-updated', () =>
+  setTimeout(() => {
+    checkNavigation();
+    scheduleScanThumbnailButtons();
+  }, 250)
+);
 
 const observer = new MutationObserver(() => {
   attachVideoListeners();
+  if (IS_HEADLESS_TAB) return;
   const progressBar = document.querySelector('.ytp-progress-bar');
   if (progressBar && !document.getElementById('chaptermind-timeline-overlay')) {
     renderTimelineOverlay();
@@ -1044,6 +1463,7 @@ const observer = new MutationObserver(() => {
   if (settings.inPageHudEnabled && !document.getElementById('chaptermind-inpage-host')) {
     renderInPageStrip();
   }
+  scheduleScanThumbnailButtons();
 });
 observer.observe(document.documentElement, { childList: true, subtree: true });
 

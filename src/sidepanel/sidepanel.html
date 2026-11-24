@@ -236,6 +236,31 @@
           </div>
         </details>
 
+        <details id="queue-card" class="drawer hidden" open>
+          <summary class="drawer-summary">
+            <span class="drawer-left">
+              <span class="chevron">▸</span>
+              <span>Headless Queue</span>
+            </span>
+            <span class="queue-summary-right">
+              <span id="queue-summary-badge" class="badge-count">0</span>
+              <button id="queue-clear-done-btn" class="btn btn-ghost btn-xs" type="button">Clear done</button>
+            </span>
+          </summary>
+          <div class="drawer-body stack-xs">
+            <div class="queue-add-row">
+              <input
+                id="queue-url-input"
+                class="input input-sm"
+                type="text"
+                placeholder="Paste YouTube URL or ID to analyze headlessly..."
+              />
+              <button id="queue-add-btn" class="btn btn-primary btn-xs" type="button">Queue</button>
+            </div>
+            <div id="queue-list" class="queue-list"></div>
+          </div>
+        </details>
+
         <div class="lib-filters">
           <input
             id="kb-search-input"

@@ -47,8 +47,9 @@ function getPlayerResponse(): Record<string, unknown> | null {
 }
 
 function extractChaptersFromYtInitialData(durationSec: number): Chapter[] {
+  const flexy = document.querySelector('ytd-watch-flexy') as { data?: unknown } | null;
   const win = window as unknown as { ytInitialData?: unknown };
-  const root = win.ytInitialData;
+  const root = flexy?.data ?? win.ytInitialData;
   if (!root || typeof root !== 'object') return [];
 
   const found: Array<{ title: string; startTime: number }> = [];

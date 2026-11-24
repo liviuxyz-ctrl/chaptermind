@@ -4,7 +4,10 @@ import {
   evaluateChapterRelevance,
   extractTopicFromChapter,
   removeTopic,
+  toggleChapterCare,
+  toggleChapterIgnore,
 } from '../src/shared/interests';
+import { extractYouTubeVideoId } from '../src/shared/youtube-url';
 import { buildVideoAnalysisPrompt, parseAiAnalysisResponse } from '../src/shared/prompts';
 import type { Chapter, VideoMetadata } from '../src/shared/types';
 
@@ -115,5 +118,69 @@ describe('Interest filter and Don’t Care chapter skipping', () => {
     expect(parsed.chapters[0]?.relevance).toBe('skip');
     expect(parsed.chapters[0]?.relevanceReason).toBe('Image generation model');
     expect(parsed.chapters[0]?.topicTags).toEqual(['image models', 'flux']);
+  });
+
+  it('toggles ignore and un-ignore (including semantic alias overrides via topicsAllow)', () => {
+    const imgChapter: Chapter = {
+      id: 'c-unignore',
+      title: 'Nano Banana Image Model Update',
+      startTime: 240,
+      endTime: 360,
+      source: 'ai',
+      topicTags: ['nano banana', 'image models'],
+    };
+
+    const initialSettings = {
+      topicsIgnore: ['image models'],
+      topicsCare: ['coding agents'],
+      topicsAllow: [] as string[],
+    };
+
+    expect(evaluateChapterRelevance(imgChapter, initialSettings).relevance).toBe('skip');
+
+    // Clicking un-ignore adds exact topic to topicsAllow so semantic alias no longer forces skip
+    const unignored = toggleChapterIgnore(imgChapter, initialSettings);
+    expect(unignored.action).toBe('unignored');
+    expect(
+      evaluateChapterRelevance(imgChapter, {
+        topicsIgnore: unignored.topicsIgnore,
+        topicsCare: unignored.topicsCare,
+        topicsAllow: unignored.topicsAllow,
+      }).relevance
+    ).toBe('normal');
+
+    // Clicking ignore again re-ignores it and clears topicsAllow override
+    const reignored = toggleChapterIgnore(imgChapter, {
+      topicsIgnore: unignored.topicsIgnore,
+      topicsCare: unignored.topicsCare,
+      topicsAllow: unignored.topicsAllow,
+    });
+    expect(reignored.action).toBe('ignored');
+    expect(
+      evaluateChapterRelevance(imgChapter, {
+        topicsIgnore: reignored.topicsIgnore,
+        topicsCare: reignored.topicsCare,
+        topicsAllow: reignored.topicsAllow,
+      }).relevance
+    ).toBe('skip');
+
+    // Toggling care twice adds and removes
+    const cared = toggleChapterCare(imgChapter, initialSettings);
+    expect(cared.action).toBe('cared');
+    const uncared = toggleChapterCare(imgChapter, {
+      topicsIgnore: cared.topicsIgnore,
+      topicsCare: cared.topicsCare,
+      topicsAllow: cared.topicsAllow,
+    });
+    expect(uncared.action).toBe('cleared');
+  });
+
+  it('extracts canonical YouTube video IDs from watch, shorts, and youtu.be URLs', () => {
+    expect(extractYouTubeVideoId('https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s')).toBe(
+      'dQw4w9WgXcQ'
+    );
+    expect(extractYouTubeVideoId('https://youtu.be/7n3cZzR0tVE?si=abc')).toBe('7n3cZzR0tVE');
+    expect(extractYouTubeVideoId('https://www.youtube.com/shorts/JhZB3spnulY')).toBe('JhZB3spnulY');
+    expect(extractYouTubeVideoId('https://www.youtube.com/@AILABS')).toBeNull();
   });
 });
