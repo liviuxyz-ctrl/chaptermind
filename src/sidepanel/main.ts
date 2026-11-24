@@ -1430,6 +1430,15 @@ function bindEvents() {
     showBanner('GitHub Sync settings saved!', 'success');
   });
 
+  document.getElementById('toggle-gh-token-btn')?.addEventListener('click', (e) => {
+    const input = document.getElementById('set-gh-token') as HTMLInputElement | null;
+    const btn = e.currentTarget as HTMLButtonElement;
+    if (!input) return;
+    const revealing = input.type === 'password';
+    input.type = revealing ? 'text' : 'password';
+    btn.textContent = revealing ? 'Hide' : 'Show';
+  });
+
   document.getElementById('test-gh-btn')?.addEventListener('click', async () => {
     const candidate = { ...settings, ...collectSettingsFromForm() };
     showBanner('Testing GitHub repository access...', 'info');
@@ -1440,9 +1449,14 @@ function bindEvents() {
         type: 'GITHUB_TEST_CONNECTION',
         settings: candidate,
       });
+      const savedRes = await sendMessage<{ settings: ExtensionSettings }>({
+        type: 'SETTINGS_SAVE',
+        settings: collectSettingsFromForm(),
+      });
+      settings = savedRes.settings;
       const access = res.info.canPush ? 'Read & Write' : 'Read-only';
       showBanner(
-        `Connected to ${res.info.fullName} (${res.info.isPrivate ? 'Private' : 'Public'}, ${access})`,
+        `Connected & saved! ${res.info.fullName} (${res.info.isPrivate ? 'Private' : 'Public'}, ${access})`,
         'success'
       );
     } catch (err) {

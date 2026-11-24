@@ -59,13 +59,34 @@ function encodeGithubPath(repoPath: string): string {
     .join('/');
 }
 
+export function normalizeGithubToken(raw?: string): string {
+  if (!raw) return '';
+  let token = raw.trim().replace(/^["']+|["']+$/g, '');
+  token = token.replace(/^(?:Bearer|token)\s+/i, '').trim();
+  if (!token) return '';
+
+  if (/\s/.test(token) || token.length > 140) {
+    throw new Error(
+      'Token looks pasted twice or contains spaces — clear the box (Ctrl+A, Backspace) and paste once.'
+    );
+  }
+  if (!/^(?:github_pat_|ghp_|gho_|ghu_|ghs_)/.test(token)) {
+    const preview = token.slice(0, 6);
+    throw new Error(
+      `GitHub token should start with "github_pat_" or "ghp_" (yours starts with "${preview}..."). Clear the box and paste your GitHub Fine-grained PAT.`
+    );
+  }
+  return token;
+}
+
 function buildHeaders(token?: string): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
   };
-  if (token?.trim()) {
-    headers.Authorization = `Bearer ${token.trim()}`;
+  const cleanToken = normalizeGithubToken(token);
+  if (cleanToken) {
+    headers.Authorization = `Bearer ${cleanToken}`;
   }
   return headers;
 }
@@ -206,7 +227,7 @@ export async function pushKnowledgeBaseToGithub(
   entries: KnowledgeEntry[],
   fetchFn: typeof fetch = fetch
 ): Promise<GithubPushResult> {
-  const token = settings.githubToken.trim();
+  const token = normalizeGithubToken(settings.githubToken);
   if (!token) {
     throw new Error('GitHub token is required to push. Add a PAT in Settings → GitHub Sync.');
   }

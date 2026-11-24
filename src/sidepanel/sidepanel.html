@@ -252,7 +252,13 @@
           </label>
           <label class="field">
             <span>API Key (stored locally)</span>
-            <input id="set-api-key" class="input" type="password" placeholder="AIza... / sk-..." />
+            <input
+              id="set-api-key"
+              class="input"
+              type="password"
+              autocomplete="off"
+              placeholder="AIza... / sk-..."
+            />
           </label>
           <label class="field">
             <span>Model</span>
@@ -346,10 +352,19 @@
             <span>Folder inside repo</span>
             <input id="set-gh-folder" class="input" type="text" placeholder="knowledge-base" />
           </label>
-          <label class="field">
+          <div class="field">
             <span>GitHub Token (Fine-grained PAT with Contents Read/Write, stored locally)</span>
-            <input id="set-gh-token" class="input" type="password" placeholder="github_pat_... / ghp_..." />
-          </label>
+            <div class="inline-add">
+              <input
+                id="set-gh-token"
+                class="input"
+                type="password"
+                autocomplete="off"
+                placeholder="github_pat_... / ghp_..."
+              />
+              <button id="toggle-gh-token-btn" type="button" class="btn btn-xs">Show</button>
+            </div>
+          </div>
           <label class="toggle-row">
             <input type="checkbox" id="set-gh-autopush" />
             <span>Auto-push newly analyzed videos to GitHub</span>

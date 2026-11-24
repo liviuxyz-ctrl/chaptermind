@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   base64ToUtf8,
   fetchKnowledgeBaseFromGithub,
+  normalizeGithubToken,
   parseGithubRepo,
   pushKnowledgeBaseToGithub,
   utf8ToBase64,
@@ -150,5 +151,11 @@ describe('GitHub Knowledge Base Sync', () => {
     expect(res.fetchedCount).toBe(1);
     expect(res.entriesToSave[0]?.videoId).toBe('newVid');
     expect(res.remoteInterests?.topicsIgnore).toEqual(['crypto']);
+  });
+
+  it('normalizes Bearer prefix and catches invalid or double-pasted GitHub tokens', () => {
+    expect(normalizeGithubToken('  Bearer github_pat_abc123  ')).toBe('github_pat_abc123');
+    expect(() => normalizeGithubToken('sk-proj-wrong-key')).toThrow(/github_pat_/i);
+    expect(() => normalizeGithubToken('github_pat_' + 'a'.repeat(150))).toThrow(/pasted twice/i);
   });
 });
