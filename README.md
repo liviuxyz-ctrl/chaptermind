@@ -1,8 +1,8 @@
 <div align="center">
 
-# ⚡ ChapterMind
+![ChapterMind Banner](docs/hero-banner.svg)
 
-**YouTube SponsorBlock + Visual & AI Chapter Skipping + "Don't Care" Topic Auto-Skip + GitHub-Synced AI Knowledge Base**
+<br />
 
 [![Manifest V3](https://img.shields.io/badge/Chrome%20%7C%20Brave%20%7C%20Edge-Manifest%20V3-10b981?style=for-the-badge)](manifest.json)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-3178c6?style=for-the-badge&logo=typescript&logoColor=white)](tsconfig.json)
@@ -10,7 +10,7 @@
 [![Vitest](https://img.shields.io/badge/Tests-25%20Passing-22c55e?style=for-the-badge)](tests)
 [![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b?style=for-the-badge)](LICENSE)
 
-[Screenshots](#-live-screenshots) • [Architecture](#-system-architecture) • [Auto-Skip Pipeline](#-smart-auto-skip-pipeline) • [AI APIs vs Subscriptions](#-dual-ai-engine-apis--your-subscriptions) • [GitHub KB Sync](#-github-knowledge-base-sync) • [Install](#-installation-chrome--brave--edge)
+[Screenshots](#-live-screenshots) • [Architecture](#-system-architecture) • [Auto-Skip Pipeline](#-smart-auto-skip-and-ai-pipeline) • [AI APIs vs Subscriptions](#-dual-ai-engine-apis--your-subscriptions) • [GitHub KB Sync](#-github-knowledge-base-sync) • [Install](#-installation-chrome--brave--edge)
 
 </div>
 
@@ -26,72 +26,39 @@ ChapterMind is built for people who watch **high-density AI & tech videos** on Y
 
 ## 📸 Live Screenshots
 
-### 1. In-Page YouTube Chapter Strip & SponsorBlock Timeline
-> Mounted directly below the YouTube player in Shadow DOM with color-coded SponsorBlock bars, active chapter tracking, quick Prev/Next skipping, and 1-click Side Panel access.
-
-![ChapterMind YouTube Player Strip](docs/youtube-player-preview.png)
-
-### 2. Side Panel: Don't Care Auto-Skip, Visual Timeline & AI Chapters
-> Shows SponsorBlock segments on the scrubber, your live **Don't Care / Auto-Skip Filter** chips, AI-enriched chapters (`★` prioritized, `⊘` struck-through & auto-skipped), and 1-click `★` / `👎` feedback.
-
-![ChapterMind Side Panel](docs/sidepanel-preview.png)
+<table>
+  <tr>
+    <td width="60%" valign="top">
+      <a href="docs/youtube-player-preview.png">
+        <img src="docs/youtube-player-preview.png" alt="ChapterMind YouTube In-Page Chapter Strip" />
+      </a>
+      <br />
+      <sub><b>In-Page YouTube Chapter Strip &amp; Timeline Overlay</b> — Mounted below the player in Shadow DOM with SponsorBlock bars, active chapter tracking, Prev/Next skip, and 1-click Side Panel access.</sub>
+    </td>
+    <td width="40%" valign="top">
+      <a href="docs/sidepanel-preview.png">
+        <img src="docs/sidepanel-preview.png" alt="ChapterMind Side Panel" />
+      </a>
+      <br />
+      <sub><b>Side Panel</b> — Color-coded timeline scrubber, live <b>Don't Care / Auto-Skip</b> filter chips, ★ prioritized chapters, ⊘ auto-skipped chapters, and 1-click ★ / 👎 training.</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
 ## 🏗 System Architecture
 
-```mermaid
-flowchart LR
-  subgraph YT["YouTube Tab (youtube.com)"]
-    MW["content-main.ts (MAIN World)<br/>ytInitialPlayerResponse · captionTracks · Transcript Drawer · movie_player.seekTo"]
-    YC["content-youtube.ts (ISOLATED)<br/>Shadow DOM Chapter Strip · Timeline Overlay · Auto-Skipper · Shortcuts"]
-    MW <-->|"window.postMessage"| YC
-  end
-
-  subgraph EXT["ChapterMind Extension (MV3)"]
-    BG["background/index.ts (Service Worker)<br/>SponsorBlock Cache · AI Orchestrator · Bridge Session · GitHub Sync"]
-    SP["sidepanel/main.ts (Side Panel UI)<br/>Now Watching · Transcript · Knowledge Base · Settings"]
-    IDB[("IndexedDB (chaptermind_kb)<br/>Videos · Chapters · Entities · Takeaways · Transcripts")]
-  end
-
-  subgraph EXT_SVC["External Services"]
-    SB["SponsorBlock API<br/>SHA-256 4-char k-anonymity"]
-    AI_API["Direct AI APIs<br/>Gemini · OpenAI · Anthropic · Ollama"]
-    AI_SUB["AI Subscription Bridge<br/>claude.ai · chatgpt.com · gemini.google.com"]
-    GH["GitHub REST API<br/>Private or Public KB Repo"]
-  end
-
-  YC <-->|"chrome.runtime"| BG
-  SP <-->|"chrome.runtime"| BG
-  BG <--> IDB
-  BG -->|"GET /api/skipSegments/{hash4}"| SB
-  BG -->|"HTTPS JSON"| AI_API
-  BG <-->|"content-ai-bridge.ts"| AI_SUB
-  BG <-->|"Push JSON + Obsidian .md / Fetch"| GH
-```
+![ChapterMind System Architecture](docs/architecture.svg)
 
 ---
 
-## 🎯 Smart Auto-Skip Pipeline
+## 🎯 Smart Auto-Skip & AI Pipeline
 
-Every playback tick runs through a deterministic **Ad-Safe Auto-Skip Pipeline** — never skipping during YouTube's own pre-roll/mid-roll ads, and always giving you a 1-click **Undo / Watch Anyway** escape hatch:
-
-```mermaid
-flowchart TD
-  TICK["Video timeupdate / seek"] --> AD{"YouTube ad-showing?"}
-  AD -- "Yes" --> STOP["Wait until video resumes"]
-  AD -- "No" --> SB{"Matches SponsorBlock<br/>or AI-detected Sponsor?"}
-
-  SB -- "Rule: skip / full" --> JUMP_SB["Seek to segment.endTime<br/>Show Toast + Undo button"]
-  SB -- "Rule: mute" --> MUTE_SB["Mute audio until endTime<br/>Show Toast + Undo button"]
-  SB -- "No" --> CARE{"Don't Care Auto-Skip ON?<br/>Matches topicsIgnore / AI skip?"}
-
-  CARE -- "Yes (not undone)" --> JUMP_CH["Jump to next non-ignored chapter<br/>Show Toast + Watch Anyway button"]
-  CARE -- "No" --> PLAY["Continue normal playback & highlight active chapter"]
-```
+![ChapterMind Auto-Skip and AI Pipeline](docs/autoskip-pipeline.svg)
 
 ### How "Don't Care" Filtering Works
-- **Semantic Alias Engine ([interests.ts](src/shared/interests.ts))**: Ignoring `"image models"` automatically catches `Midjourney`, `Flux`, `DALL-E`, `Stable Diffusion`, `Imagen`, and `Nano Banana`; ignoring `"video generation"` catches `Sora`, `Veo`, `Runway`, `Kling`, and `Luma`; ignoring `"useless small models"` catches `1B–3B / tiny / edge` models — plus exact matching for any custom keyword or channel topic you add.
+- **Semantic Alias Engine ([interests.ts](src/shared/interests.ts))**: Ignoring `"image models"` automatically catches `Midjourney`, `Flux`, `DALL-E`, `Stable Diffusion`, `Imagen`, and `Nano Banana`; ignoring `"video generation"` catches `Sora`, `Veo`, `Runway`, `Kling`, and `Luma`; ignoring `"useless small models"` catches `1B–3B / tiny / edge` models — plus exact matching for any custom keyword or topic you add.
 - **1-Click Feedback**: Click **`👎`** on any chapter card to immediately add that topic to your ignore list (or **`★`** to boost topics you care about).
 - **Prompt-Aware**: Both API and Subscription prompts inject your **Viewer Interest Profile**, so the AI tags chapters `must_watch`, `normal`, or `skip` before you even press play.
 
@@ -107,26 +74,6 @@ flowchart TD
 | **Transcript Cleaning** | Strips SponsorBlock cues before sending | Strips SponsorBlock cues before sending |
 | **Ask Your Knowledge Base** | Instant grounded answer with `[Title @ MM:SS]` citations | Grounded context sent to your AI chat tab & captured back |
 
-```mermaid
-sequenceDiagram
-  actor User
-  participant SP as ChapterMind Side Panel
-  participant BG as Service Worker
-  participant AI as claude.ai / chatgpt.com / gemini.google.com
-  participant YT as YouTube Tab
-
-  User->>SP: Click "Claude" (or Gemini / ChatGPT)
-  SP->>BG: Send transcript + SponsorBlock segments + Interest Profile
-  BG->>BG: Strip sponsor cues & build JSON prompt
-  BG->>AI: Open / focus AI tab + save BridgeTask
-  User->>AI: Click "1. Paste Prompt" on Bridge Pill & press Enter
-  AI-->>User: Generates structured JSON chapters & entities
-  User->>AI: Click "2. Capture Reply"
-  AI->>BG: IMPORT_BRIDGE_RESPONSE
-  BG->>YT: Push AI chapters & AI sponsors live (APPLY_ANALYSIS)
-  BG-->>User: Optionally auto-return to YouTube tab
-```
-
 ---
 
 ## 🐙 GitHub Knowledge Base Sync
@@ -136,11 +83,11 @@ Store your entire AI video library in your own private or public GitHub reposito
 ```text
 <your-repo>/
 └── knowledge-base/
-    ├── index.json                      # Video manifest + Care / Don't Care interest profile
+    ├── index.json                           # Video manifest + Care / Don't Care interest profile
     ├── videos/
-    │   └── 7n3cZzR0tVE.json            # Full lossless KnowledgeEntry (for cross-browser Fetch)
+    │   └── 7n3cZzR0tVE.json                 # Full lossless KnowledgeEntry (for cross-browser Fetch)
     └── notes/
-        └── 7n3cZzR0tVE-gemini-5-leaked.md  # Obsidian-ready Markdown with clickable timestamps
+        └── 7n3cZzR0tVE-gemini-5-leaked.md   # Obsidian-ready Markdown with clickable timestamps
 ```
 
 <details>
@@ -223,6 +170,7 @@ npm run test:e2e    # Playwright Chromium live YouTube + Side Panel E2E suite
 ```text
 chaptermind/
 ├── manifest.json                 # Chrome Extension Manifest V3 definition
+├── docs/                         # Vector SVG diagrams & live screenshots
 ├── scripts/
 │   ├── build.mjs                 # Bundles 5 entrypoints + generates icons into dist/
 │   └── e2e-test.mjs              # Live Chromium E2E test against YouTube & Side Panel

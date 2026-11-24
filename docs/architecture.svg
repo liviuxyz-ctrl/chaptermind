@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" width="1200" height="540">
+  <defs>
+    <linearGradient id="archBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b0f17" />
+      <stop offset="100%" stop-color="#111827" />
+    </linearGradient>
+    <marker id="arrowCyan" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8" />
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#10b981" />
+    </marker>
+    <marker id="arrowAmber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#f59e0b" />
+    </marker>
+    <marker id="arrowViolet" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#a78bfa" />
+    </marker>
+  </defs>
+
+  <rect width="1200" height="540" rx="16" fill="url(#archBg)" stroke="#243044" stroke-width="1.5" />
+
+  <!-- Header -->
+  <text x="36" y="42" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="22" font-weight="800" fill="#f8fafc">
+    System Architecture (Manifest V3)
+  </text>
+  <text x="36" y="64" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" fill="#94a3b8">
+    Zero audio downloads · Local-first IndexedDB + GitHub Sync · Privacy-preserving SponsorBlock SHA-256 queries
+  </text>
+
+  <!-- COLUMN 1: YOUTUBE TAB -->
+  <g transform="translate(36, 90)">
+    <rect width="330" height="416" rx="14" fill="#111622" stroke="#dc2626" stroke-opacity="0.45" stroke-width="1.5" />
+    <rect x="0" y="0" width="330" height="38" rx="14" fill="#dc2626" fill-opacity="0.14" />
+    <text x="18" y="24" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" font-weight="700" fill="#fca5a5">
+      YOUTUBE TAB (youtube.com)
+    </text>
+
+    <!-- MAIN World Box -->
+    <rect x="18" y="56" width="294" height="148" rx="10" fill="#182032" stroke="#334155" />
+    <text x="32" y="80" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#7dd3fc">
+      content-main.ts (MAIN World)
+    </text>
+    <text x="32" y="104" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Reads ytInitialPlayerResponse &amp; chapters
+    </text>
+    <text x="32" y="126" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Fetches captionTracks (JSON3 / XML)
+    </text>
+    <text x="32" y="148" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Transcript-drawer fallback (PoToken)
+    </text>
+    <text x="32" y="170" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Seeks via movie_player.seekTo()
+    </text>
+
+    <!-- postMessage connector -->
+    <line x1="165" y1="204" x2="165" y2="244" stroke="#38bdf8" stroke-width="2" marker-start="url(#arrowCyan)" marker-end="url(#arrowCyan)" />
+    <rect x="92" y="213" width="146" height="20" rx="6" fill="#0f172a" stroke="#38bdf8" stroke-opacity="0.5" />
+    <text x="165" y="227" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#7dd3fc">
+      window.postMessage
+    </text>
+
+    <!-- ISOLATED World Box -->
+    <rect x="18" y="246" width="294" height="150" rx="10" fill="#182032" stroke="#334155" />
+    <text x="32" y="270" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#6ee7b7">
+      youtube-content.ts (ISOLATED)
+    </text>
+    <text x="32" y="294" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Shadow DOM chapter pill bar below player
+    </text>
+    <text x="32" y="316" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Color bars on .ytp-progress-bar
+    </text>
+    <text x="32" y="338" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • SponsorBlock + Don't Care auto-skipper
+    </text>
+    <text x="32" y="360" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Undo / Watch Anyway toast &amp; hotkeys
+    </text>
+  </g>
+
+  <!-- COLUMN 2: EXTENSION CORE -->
+  <g transform="translate(432, 90)">
+    <rect width="336" height="416" rx="14" fill="#111622" stroke="#10b981" stroke-opacity="0.55" stroke-width="1.5" />
+    <rect x="0" y="0" width="336" height="38" rx="14" fill="#10b981" fill-opacity="0.14" />
+    <text x="18" y="24" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" font-weight="700" fill="#6ee7b7">
+      EXTENSION CORE (MV3)
+    </text>
+
+    <!-- Service Worker -->
+    <rect x="18" y="56" width="300" height="124" rx="10" fill="#182032" stroke="#10b981" stroke-opacity="0.45" />
+    <text x="32" y="80" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#34d399">
+      background/index.ts
+    </text>
+    <text x="32" y="102" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • SponsorBlock segment cache (10 min)
+    </text>
+    <text x="32" y="123" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Strips sponsors + injects Interest Profile
+    </text>
+    <text x="32" y="144" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Manages API calls, Bridge &amp; GitHub sync
+    </text>
+
+    <!-- Side Panel -->
+    <rect x="18" y="196" width="300" height="104" rx="10" fill="#182032" stroke="#38bdf8" stroke-opacity="0.45" />
+    <text x="32" y="220" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#38bdf8">
+      sidepanel/main.ts (4 Tabs)
+    </text>
+    <text x="32" y="242" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Now Watching · Transcript · KB · Settings
+    </text>
+    <text x="32" y="263" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • 1-click ★ / 👎 feedback &amp; Ask Your KB
+    </text>
+    <text x="32" y="284" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Push / Fetch / Open GitHub + Obsidian .md
+    </text>
+
+    <!-- IndexedDB -->
+    <rect x="18" y="316" width="300" height="80" rx="10" fill="#182032" stroke="#818cf8" stroke-opacity="0.45" />
+    <text x="32" y="340" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" fill="#a5b4fc">
+      IndexedDB (chaptermind_kb)
+    </text>
+    <text x="32" y="362" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Videos, AI chapters, entities &amp; takeaways
+    </text>
+    <text x="32" y="382" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      • Cleaned transcripts + settings storage
+    </text>
+  </g>
+
+  <!-- COLUMN 3: EXTERNAL SERVICES -->
+  <g transform="translate(834, 90)">
+    <rect width="330" height="416" rx="14" fill="#111622" stroke="#38bdf8" stroke-opacity="0.45" stroke-width="1.5" />
+    <rect x="0" y="0" width="330" height="38" rx="14" fill="#38bdf8" fill-opacity="0.14" />
+    <text x="18" y="24" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" font-weight="700" fill="#7dd3fc">
+      EXTERNAL APIS &amp; SUBSCRIPTIONS
+    </text>
+
+    <rect x="18" y="56" width="294" height="78" rx="10" fill="#182032" stroke="#22c55e" stroke-opacity="0.5" />
+    <text x="32" y="80" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" font-weight="700" fill="#4ade80">
+      SponsorBlock Public API
+    </text>
+    <text x="32" y="102" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#cbd5e1">
+      GET /api/skipSegments/{sha256_4}
+    </text>
+    <text x="32" y="120" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="11.5" fill="#94a3b8">
+      k-anonymity privacy · Sponsors &amp; Chapters
+    </text>
+
+    <rect x="18" y="148" width="294" height="78" rx="10" fill="#182032" stroke="#38bdf8" stroke-opacity="0.5" />
+    <text x="32" y="172" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" font-weight="700" fill="#7dd3fc">
+      Direct AI APIs (BYO Key / Local)
+    </text>
+    <text x="32" y="193" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" fill="#cbd5e1">
+      Gemini · OpenAI (GPT-5/o-series) · Claude
+    </text>
+    <text x="32" y="212" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="11.5" fill="#94a3b8">
+      Plus local Ollama &amp; OpenAI-compatible URLs
+    </text>
+
+    <rect x="18" y="240" width="294" height="78" rx="10" fill="#182032" stroke="#f59e0b" stroke-opacity="0.55" />
+    <text x="32" y="264" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" font-weight="700" fill="#fcd34d">
+      AI Subscription Bridge ($0 API)
+    </text>
+    <text x="32" y="285" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#cbd5e1">
+      content-ai-bridge.ts
+    </text>
+    <text x="32" y="304" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="11.5" fill="#94a3b8">
+      claude.ai · chatgpt.com · gemini.google.com
+    </text>
+
+    <rect x="18" y="332" width="294" height="68" rx="10" fill="#182032" stroke="#a78bfa" stroke-opacity="0.55" />
+    <text x="32" y="356" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" font-weight="700" fill="#c4b5fd">
+      GitHub Knowledge Base Sync
+    </text>
+    <text x="32" y="378" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="11.5" fill="#cbd5e1">
+      Push &amp; Fetch JSON + Obsidian .md via PAT
+    </text>
+  </g>
+
+  <!-- Cross-column Arrows -->
+  <line x1="366" y1="350" x2="430" y2="215" stroke="#10b981" stroke-width="2" marker-start="url(#arrowGreen)" marker-end="url(#arrowGreen)" />
+  <line x1="366" y1="395" x2="430" y2="335" stroke="#38bdf8" stroke-width="2" marker-start="url(#arrowCyan)" marker-end="url(#arrowCyan)" />
+
+  <line x1="768" y1="185" x2="832" y2="185" stroke="#10b981" stroke-width="2" marker-end="url(#arrowGreen)" />
+  <line x1="768" y1="220" x2="832" y2="275" stroke="#38bdf8" stroke-width="2" marker-start="url(#arrowCyan)" marker-end="url(#arrowCyan)" />
+  <line x1="768" y1="245" x2="832" y2="365" stroke="#f59e0b" stroke-width="2" marker-start="url(#arrowAmber)" marker-end="url(#arrowAmber)" />
+  <line x1="768" y1="262" x2="832" y2="452" stroke="#a78bfa" stroke-width="2" marker-start="url(#arrowViolet)" marker-end="url(#arrowViolet)" />
+</svg>

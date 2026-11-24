@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" width="1200" height="420">
+  <defs>
+    <linearGradient id="pipeBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b0f17" />
+      <stop offset="100%" stop-color="#111827" />
+    </linearGradient>
+    <marker id="arrG" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#10b981" />
+    </marker>
+    <marker id="arrO" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#f97316" />
+    </marker>
+    <marker id="arrC" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#38bdf8" />
+    </marker>
+  </defs>
+
+  <rect width="1200" height="420" rx="16" fill="url(#pipeBg)" stroke="#243044" stroke-width="1.5" />
+
+  <!-- LANE 1: SMART PLAYBACK AUTO-SKIP -->
+  <text x="36" y="42" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="18" font-weight="800" fill="#f8fafc">
+    1. Ad-Safe Playback Auto-Skip Engine
+  </text>
+
+  <g transform="translate(36, 62)" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+    <!-- Node 1 -->
+    <rect x="0" y="0" width="190" height="110" rx="12" fill="#161f30" stroke="#334155" />
+    <text x="95" y="34" text-anchor="middle" font-size="13" font-weight="700" fill="#e2e8f0">Playback Tick</text>
+    <text x="95" y="56" text-anchor="middle" font-size="11.5" fill="#94a3b8">Checks video time</text>
+    <text x="95" y="76" text-anchor="middle" font-size="11.5" fill="#94a3b8">Skips if ad-showing</text>
+
+    <line x1="190" y1="55" x2="226" y2="55" stroke="#10b981" stroke-width="2" marker-end="url(#arrG)" />
+
+    <!-- Node 2 -->
+    <rect x="232" y="0" width="250" height="110" rx="12" fill="#07281a" stroke="#10b981" stroke-opacity="0.7" />
+    <text x="357" y="32" text-anchor="middle" font-size="13" font-weight="700" fill="#4ade80">SponsorBlock + AI Ads</text>
+    <text x="357" y="54" text-anchor="middle" font-size="11.5" fill="#cbd5e1">Sponsor · SelfPromo · Intro · Filler</text>
+    <text x="357" y="74" text-anchor="middle" font-size="11.5" fill="#86efac">Skip / Mute + 1-click Undo Toast</text>
+    <text x="357" y="94" text-anchor="middle" font-size="10.5" fill="#6ee7b7">Uses movie_player.seekTo()</text>
+
+    <line x1="482" y1="55" x2="518" y2="55" stroke="#f97316" stroke-width="2" marker-end="url(#arrO)" />
+
+    <!-- Node 3 -->
+    <rect x="524" y="0" width="290" height="110" rx="12" fill="#2a1208" stroke="#f97316" stroke-opacity="0.75" />
+    <text x="669" y="32" text-anchor="middle" font-size="13" font-weight="700" fill="#fdba74">"Don't Care" Interest Filter</text>
+    <text x="669" y="54" text-anchor="middle" font-size="11.5" fill="#cbd5e1">Image / Video Gen · Small Models · Crypto</text>
+    <text x="669" y="74" text-anchor="middle" font-size="11.5" fill="#fed7aa">Semantic Aliases + 1-click 👎 Topics</text>
+    <text x="669" y="94" text-anchor="middle" font-size="10.5" fill="#fdba74">Jumps to next ★ / Normal chapter + Watch Anyway</text>
+
+    <line x1="814" y1="55" x2="850" y2="55" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrC)" />
+
+    <!-- Node 4 -->
+    <rect x="856" y="0" width="272" height="110" rx="12" fill="#0d2235" stroke="#38bdf8" stroke-opacity="0.7" />
+    <text x="992" y="34" text-anchor="middle" font-size="13" font-weight="700" fill="#7dd3fc">Watch What Matters</text>
+    <text x="992" y="56" text-anchor="middle" font-size="11.5" fill="#cbd5e1">Highlights active chapter pill</text>
+    <text x="992" y="76" text-anchor="middle" font-size="11.5" fill="#cbd5e1">[ / ] shortcuts &amp; visual timeline</text>
+    <text x="992" y="96" text-anchor="middle" font-size="11" fill="#38bdf8">Only high-signal AI content</text>
+  </g>
+
+  <!-- Divider -->
+  <line x1="36" y1="205" x2="1164" y2="205" stroke="#1e293b" stroke-width="1.5" stroke-dasharray="6 6" />
+
+  <!-- LANE 2: TRANSCRIPT-TO-KNOWLEDGE PIPELINE -->
+  <text x="36" y="242" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="18" font-weight="800" fill="#f8fafc">
+    2. Transcript-Only AI &amp; Knowledge Base Pipeline
+  </text>
+
+  <g transform="translate(36, 262)" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+    <rect x="0" y="0" width="242" height="122" rx="12" fill="#161f30" stroke="#334155" />
+    <text x="121" y="32" text-anchor="middle" font-size="13" font-weight="700" fill="#7dd3fc">1. Extract Transcript</text>
+    <text x="121" y="54" text-anchor="middle" font-size="11.5" fill="#cbd5e1">No audio download needed</text>
+    <text x="121" y="75" text-anchor="middle" font-size="11.5" fill="#94a3b8">captionTracks (JSON3/XML)</text>
+    <text x="121" y="96" text-anchor="middle" font-size="11.5" fill="#94a3b8">+ Transcript Drawer fallback</text>
+
+    <line x1="242" y1="61" x2="274" y2="61" stroke="#10b981" stroke-width="2" marker-end="url(#arrG)" />
+
+    <rect x="280" y="0" width="242" height="122" rx="12" fill="#07281a" stroke="#10b981" stroke-opacity="0.65" />
+    <text x="401" y="32" text-anchor="middle" font-size="13" font-weight="700" fill="#4ade80">2. Clean &amp; Profile</text>
+    <text x="401" y="54" text-anchor="middle" font-size="11.5" fill="#cbd5e1">Strips SponsorBlock ad cues</text>
+    <text x="401" y="75" text-anchor="middle" font-size="11.5" fill="#cbd5e1">Evenly samples long videos</text>
+    <text x="401" y="96" text-anchor="middle" font-size="11.5" fill="#86efac">Injects Care / Ignore interests</text>
+
+    <line x1="522" y1="61" x2="554" y2="61" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrC)" />
+
+    <rect x="560" y="0" width="270" height="122" rx="12" fill="#1a1736" stroke="#818cf8" stroke-opacity="0.7" />
+    <text x="695" y="32" text-anchor="middle" font-size="13" font-weight="700" fill="#c7d2fe">3. Dual AI Analysis</text>
+    <text x="695" y="54" text-anchor="middle" font-size="11.5" fill="#cbd5e1">API: Gemini · OpenAI · Claude · Ollama</text>
+    <text x="695" y="75" text-anchor="middle" font-size="11.5" fill="#fcd34d">Sub ($0): Claude · ChatGPT · Gemini</text>
+    <text x="695" y="96" text-anchor="middle" font-size="11" fill="#a5b4fc">Outputs JSON chapters, entities, sponsors</text>
+
+    <line x1="830" y1="61" x2="862" y2="61" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrC)" />
+
+    <rect x="868" y="0" width="260" height="122" rx="12" fill="#0d2235" stroke="#38bdf8" stroke-opacity="0.7" />
+    <text x="998" y="32" text-anchor="middle" font-size="13" font-weight="700" fill="#7dd3fc">4. Live UI + GitHub KB</text>
+    <text x="998" y="54" text-anchor="middle" font-size="11.5" fill="#cbd5e1">Updates YouTube bar instantly</text>
+    <text x="998" y="75" text-anchor="middle" font-size="11.5" fill="#cbd5e1">Saves to IndexedDB + Search</text>
+    <text x="998" y="96" text-anchor="middle" font-size="11.5" fill="#6ee7b7">Push / Fetch JSON &amp; Obsidian .md</text>
+  </g>
+</svg>

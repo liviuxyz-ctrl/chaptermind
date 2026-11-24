@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 280" width="1200" height="280">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b0f17" />
+      <stop offset="55%" stop-color="#111827" />
+      <stop offset="100%" stop-color="#0d1b24" />
+    </linearGradient>
+    <radialGradient id="glowLeft" cx="15%" cy="35%" r="45%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="glowRight" cx="85%" cy="65%" r="45%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.20" />
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="brandGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="50%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#818cf8" />
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#1e293b" stroke-width="0.6" opacity="0.45" />
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="280" rx="18" fill="url(#bgGrad)" stroke="#243044" stroke-width="1.5" />
+  <rect width="1200" height="280" rx="18" fill="url(#grid)" />
+  <rect width="1200" height="280" rx="18" fill="url(#glowLeft)" />
+  <rect width="1200" height="280" rx="18" fill="url(#glowRight)" />
+
+  <!-- Icon badge -->
+  <g transform="translate(56, 46)">
+    <rect width="92" height="92" rx="22" fill="#0f172a" stroke="#10b981" stroke-width="2" />
+    <polygon points="34,24 68,43 34,62" fill="#10b981" />
+    <rect x="18" y="70" width="22" height="7" rx="3.5" fill="#38bdf8" />
+    <rect x="43" y="70" width="14" height="7" rx="3.5" fill="#00d400" />
+    <rect x="60" y="70" width="14" height="7" rx="3.5" fill="#f97316" />
+  </g>
+
+  <!-- Title & Tagline -->
+  <text x="172" y="84" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="44" font-weight="800" fill="#f8fafc" letter-spacing="-0.5">
+    ChapterMind
+  </text>
+  <rect x="454" y="54" width="146" height="28" rx="14" fill="#10b981" fill-opacity="0.16" stroke="#10b981" stroke-opacity="0.5" />
+  <text x="527" y="73" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" font-weight="700" fill="#34d399">
+    CHROME · BRAVE · MV3
+  </text>
+
+  <text x="172" y="118" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="18" fill="#cbd5e1">
+    SponsorBlock + Visual &amp; AI Chapter Navigation + Don't Care Auto-Skip + GitHub AI Knowledge Base
+  </text>
+
+  <!-- Feature pills -->
+  <g font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="13" font-weight="600">
+    <rect x="172" y="138" width="166" height="30" rx="15" fill="#052e16" stroke="#22c55e" stroke-opacity="0.55" />
+    <text x="255" y="158" text-anchor="middle" fill="#86efac">SponsorBlock SHA-256</text>
+
+    <rect x="350" y="138" width="176" height="30" rx="15" fill="#082f49" stroke="#38bdf8" stroke-opacity="0.55" />
+    <text x="438" y="158" text-anchor="middle" fill="#7dd3fc">Transcript-Only (No Audio)</text>
+
+    <rect x="538" y="138" width="184" height="30" rx="15" fill="#431407" stroke="#f97316" stroke-opacity="0.6" />
+    <text x="630" y="158" text-anchor="middle" fill="#fdba74">Don't Care Topic Auto-Skip</text>
+
+    <rect x="734" y="138" width="210" height="30" rx="15" fill="#1e1b4b" stroke="#818cf8" stroke-opacity="0.55" />
+    <text x="839" y="158" text-anchor="middle" fill="#c7d2fe">Claude / ChatGPT / Gemini + APIs</text>
+
+    <rect x="956" y="138" width="180" height="30" rx="15" fill="#172554" stroke="#60a5fa" stroke-opacity="0.55" />
+    <text x="1046" y="158" text-anchor="middle" fill="#bfdbfe">GitHub KB Sync (JSON + .md)</text>
+  </g>
+
+  <!-- Stylized YouTube Smart Timeline Preview -->
+  <g transform="translate(56, 204)">
+    <rect x="0" y="0" width="1088" height="44" rx="10" fill="#0a0e17" stroke="#263145" />
+    <rect x="14" y="12" width="1060" height="12" rx="6" fill="#1e293b" />
+    <!-- Chapter segments -->
+    <rect x="14" y="12" width="210" height="12" rx="6" fill="#38bdf8" fill-opacity="0.72" />
+    <rect x="226" y="12" width="120" height="12" fill="#00d400" />
+    <rect x="348" y="12" width="220" height="12" fill="#10b981" fill-opacity="0.85" />
+    <rect x="570" y="12" width="38" height="12" fill="#facc15" />
+    <rect x="610" y="12" width="180" height="12" fill="#f97316" fill-opacity="0.85" />
+    <rect x="792" y="12" width="46" height="12" fill="#c084fc" />
+    <rect x="840" y="12" width="234" height="12" rx="6" fill="#38bdf8" fill-opacity="0.72" />
+    <!-- Playhead -->
+    <rect x="442" y="8" width="4" height="20" rx="2" fill="#ffffff" />
+
+    <!-- Legend labels -->
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#94a3b8">
+      <text x="18" y="38">0:00 ★ Frontier LLMs</text>
+      <text x="230" y="38" fill="#4ade80">SB: Sponsor (Skipped)</text>
+      <text x="415" y="38" fill="#6ee7b7">★ Coding Agents</text>
+      <text x="614" y="38" fill="#fdba74">⊘ Image Models (Auto-Skipped)</text>
+      <text x="860" y="38" fill="#7dd3fc">25:03 · Saved to GitHub KB</text>
+    </g>
+  </g>
+</svg>
