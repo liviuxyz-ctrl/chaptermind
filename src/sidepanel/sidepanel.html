@@ -38,6 +38,13 @@
 
       <!-- TAB 1: NOW WATCHING -->
       <section id="tab-watching" class="panel active">
+        <div id="open-tabs-bar" class="open-tabs-bar hidden">
+          <div id="open-tabs-list" class="open-tabs-list" aria-label="Open YouTube video tabs"></div>
+          <button id="queue-open-tabs-btn" class="btn btn-xs btn-ghost shrink-0" type="button" title="Queue all unsaved open YouTube tabs headlessly">
+            Queue All
+          </button>
+        </div>
+
         <div id="no-video-card" class="empty-state hidden">
           <p class="empty-title">Open any YouTube video</p>
           <p class="empty-sub">
@@ -253,7 +260,7 @@
                 id="queue-url-input"
                 class="input input-sm"
                 type="text"
-                placeholder="Paste YouTube URL or ID to analyze headlessly..."
+                placeholder="Paste 1 or more YouTube URLs / IDs..."
               />
               <button id="queue-add-btn" class="btn btn-primary btn-xs" type="button">Queue</button>
             </div>

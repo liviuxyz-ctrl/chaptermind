@@ -40,7 +40,7 @@ const SETTINGS_STORAGE_KEY = 'chaptermind_settings';
 const BRIDGE_TASK_KEY = 'chaptermind_bridge_task';
 
 const sponsorCache = new Map<string, { fetchedAt: number; segments: SponsorSegment[] }>();
-let memoryBridgeTask: BridgeTask | null = null;
+let memoryBridgeTasks: Partial<Record<SubscriptionProvider, BridgeTask>> = {};
 
 chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
 
@@ -89,29 +89,60 @@ async function saveSettings(partial: Partial<ExtensionSettings>): Promise<Extens
   return next;
 }
 
-async function setBridgeTask(task: BridgeTask | null) {
-  memoryBridgeTask = task;
+async function readAllBridgeTasks(): Promise<Partial<Record<SubscriptionProvider, BridgeTask>>> {
   try {
-    if (task) {
-      await chrome.storage.session.set({ [BRIDGE_TASK_KEY]: task });
+    const res = await chrome.storage.session.get(BRIDGE_TASK_KEY);
+    const raw = res[BRIDGE_TASK_KEY];
+    if (raw && typeof raw === 'object' && !('id' in raw)) {
+      return raw as Partial<Record<SubscriptionProvider, BridgeTask>>;
+    }
+    if (raw && typeof raw === 'object' && 'id' in raw) {
+      const legacy = raw as BridgeTask;
+      return { [legacy.provider]: legacy };
+    }
+  } catch {
+    // storage.session fallback to memoryBridgeTasks
+  }
+  return { ...memoryBridgeTasks };
+}
+
+async function setBridgeTask(task: BridgeTask | null, provider?: SubscriptionProvider) {
+  const next = await readAllBridgeTasks();
+  if (task) {
+    next[task.provider] = task;
+  } else if (provider) {
+    delete next[provider];
+  } else {
+    for (const k of Object.keys(next) as SubscriptionProvider[]) {
+      delete next[k];
+    }
+  }
+  memoryBridgeTasks = next;
+  try {
+    if (Object.keys(next).length > 0) {
+      await chrome.storage.session.set({ [BRIDGE_TASK_KEY]: next });
     } else {
       await chrome.storage.session.remove(BRIDGE_TASK_KEY);
     }
   } catch {
-    // storage.session fallback to memoryBridgeTask
+    // storage.session fallback to memoryBridgeTasks
   }
 }
 
-async function getBridgeTask(): Promise<BridgeTask | null> {
-  try {
-    const res = await chrome.storage.session.get(BRIDGE_TASK_KEY);
-    if (res[BRIDGE_TASK_KEY]) {
-      return res[BRIDGE_TASK_KEY] as BridgeTask;
-    }
-  } catch {
-    // fallback
+async function getBridgeTask(
+  provider?: SubscriptionProvider,
+  taskId?: string
+): Promise<BridgeTask | null> {
+  const all = await readAllBridgeTasks();
+  const tasks = Object.values(all).filter((t): t is BridgeTask => Boolean(t));
+  if (taskId) {
+    return tasks.find((t) => t.id === taskId) ?? null;
   }
-  return memoryBridgeTask;
+  if (provider) {
+    return all[provider] ?? null;
+  }
+  tasks.sort((a, b) => b.createdAt - a.createdAt);
+  return tasks[0] ?? null;
 }
 
 function buildKnowledgeEntryFromAnalysis(
@@ -204,12 +235,29 @@ async function pushAnalysisToYouTubeTabs(entry: KnowledgeEntry, preferredTabId?:
   }
 }
 
+let githubPushInFlight = false;
+let githubPushPendingSettings: ExtensionSettings | null = null;
+
 async function maybeAutoPushGithub(settings: ExtensionSettings) {
   if (!settings.githubAutoPush || !settings.githubRepo.trim() || !settings.githubToken.trim()) {
     return;
   }
-  const allEntries = await getAllEntries();
-  await pushKnowledgeBaseToGithub(settings, allEntries);
+  if (githubPushInFlight) {
+    githubPushPendingSettings = settings;
+    return;
+  }
+  githubPushInFlight = true;
+  let currentSettings: ExtensionSettings | null = settings;
+  try {
+    while (currentSettings) {
+      githubPushPendingSettings = null;
+      const allEntries = await getAllEntries();
+      await pushKnowledgeBaseToGithub(currentSettings, allEntries);
+      currentSettings = githubPushPendingSettings;
+    }
+  } finally {
+    githubPushInFlight = false;
+  }
 }
 
 async function handleMessage(
@@ -302,6 +350,7 @@ async function handleMessage(
 
       await putEntry(entry);
       await pushAnalysisToYouTubeTabs(entry);
+      chrome.runtime.sendMessage({ type: 'ANALYSIS_COMPLETED', entry }).catch(() => {});
       void maybeAutoPushGithub(settings).catch(() => {});
       return { ok: true, entry };
     }
@@ -323,6 +372,7 @@ async function handleMessage(
       );
       await putEntry(entry);
       await pushAnalysisToYouTubeTabs(entry);
+      chrome.runtime.sendMessage({ type: 'ANALYSIS_COMPLETED', entry }).catch(() => {});
       void maybeAutoPushGithub(settings).catch(() => {});
       return { ok: true, entry };
     }
@@ -396,17 +446,20 @@ async function handleMessage(
     }
 
     case 'GET_BRIDGE_TASK': {
-      const [task, settings] = await Promise.all([getBridgeTask(), loadSettings()]);
+      const [task, settings] = await Promise.all([
+        getBridgeTask(msg.provider),
+        loadSettings(),
+      ]);
       return { task, bridgePillEnabled: settings.bridgePillEnabled };
     }
 
     case 'CLEAR_BRIDGE_TASK': {
-      await setBridgeTask(null);
+      await setBridgeTask(null, msg.provider);
       return { ok: true };
     }
 
     case 'IMPORT_BRIDGE_RESPONSE': {
-      const task = await getBridgeTask();
+      const task = await getBridgeTask(undefined, msg.taskId);
       if (!task || task.id !== msg.taskId) {
         return { ok: false, error: 'Bridge task expired or not found.' };
       }
@@ -423,7 +476,7 @@ async function handleMessage(
         );
         await putEntry(entry);
         await pushAnalysisToYouTubeTabs(entry, task.tabId);
-        await setBridgeTask(null);
+        await setBridgeTask(null, task.provider);
         chrome.runtime.sendMessage({ type: 'BRIDGE_ANALYSIS_READY', entry }).catch(() => {});
         void maybeAutoPushGithub(settings).catch(() => {});
         if (settings.autoReturnAfterBridgeCapture && task.tabId) {
@@ -437,7 +490,7 @@ async function handleMessage(
         const usedEntries = task.matchedVideoIds?.length
           ? allEntries.filter((e) => task.matchedVideoIds?.includes(e.videoId))
           : allEntries.slice(0, 5);
-        await setBridgeTask(null);
+        await setBridgeTask(null, task.provider);
         chrome.runtime
           .sendMessage({
             type: 'BRIDGE_KB_ANSWER_READY',
@@ -530,6 +583,47 @@ async function handleMessage(
       return { ok: Boolean(job), job, jobs };
     }
 
+    case 'QUEUE_ADD_BATCH': {
+      const added = await enqueueHeadlessBatch(msg.items);
+      const jobs = await loadQueueJobs();
+      return { ok: added.length > 0, addedCount: added.length, jobs };
+    }
+
+    case 'QUEUE_ADD_OPEN_TABS': {
+      const ytTabs = await chrome.tabs.query({
+        url: ['https://www.youtube.com/watch*', 'https://www.youtube.com/shorts/*'],
+      });
+      const existingEntries = msg.onlyUnsaved !== false ? await getAllEntries() : [];
+      const savedIds = new Set(existingEntries.map((e) => e.videoId));
+      const seenVid = new Set<string>();
+      const batchItems: Array<{ urlOrId: string; title?: string; channelName?: string }> = [];
+      let skippedSavedCount = 0;
+
+      for (const tab of ytTabs) {
+        if (!tab.url || tab.url.includes('cm_headless=1')) continue;
+        const vid = extractYouTubeVideoId(tab.url);
+        if (!vid || seenVid.has(vid)) continue;
+        seenVid.add(vid);
+        if (savedIds.has(vid)) {
+          skippedSavedCount += 1;
+          continue;
+        }
+        batchItems.push({
+          urlOrId: vid,
+          title: tab.title?.replace(/\s*-\s*YouTube$/, '').trim() || undefined,
+        });
+      }
+
+      const added = await enqueueHeadlessBatch(batchItems);
+      const jobs = await loadQueueJobs();
+      return {
+        ok: true,
+        queuedCount: added.length,
+        skippedSavedCount,
+        jobs,
+      };
+    }
+
     case 'QUEUE_REMOVE': {
       const jobs = (await loadQueueJobs()).filter((j) => j.videoId !== msg.videoId);
       await saveQueueJobs(jobs);
@@ -581,7 +675,8 @@ const pendingHeadlessCaptures = new Map<
   }
 >();
 
-let queueWorkerRunning = false;
+const MAX_CONCURRENT_QUEUE_JOBS = 2;
+const inFlightQueueVideoIds = new Set<string>();
 
 async function loadQueueJobs(): Promise<QueueJob[]> {
   try {
@@ -776,138 +871,189 @@ async function updateQueueJob(
   return next;
 }
 
+async function tryCaptureFromExistingYouTubeTab(
+  videoId: string
+): Promise<HeadlessCaptureResult | null> {
+  const ytTabs = await chrome.tabs
+    .query({ url: ['https://www.youtube.com/watch*', 'https://www.youtube.com/shorts/*'] })
+    .catch(() => []);
+  for (const tab of ytTabs) {
+    if (!tab.id || !tab.url || tab.url.includes('cm_headless=1')) continue;
+    if (extractYouTubeVideoId(tab.url) !== videoId) continue;
+    try {
+      const res = (await chrome.tabs.sendMessage(tab.id, {
+        type: 'GET_ACTIVE_VIDEO_STATE',
+      })) as
+        | { state?: { meta?: VideoMetadata | null; transcript?: TranscriptCue[]; youtubeChapters?: Chapter[] } }
+        | undefined;
+      const st = res?.state;
+      if (st?.meta?.videoId === videoId && Array.isArray(st.transcript) && st.transcript.length > 0) {
+        return {
+          meta: st.meta,
+          transcript: st.transcript,
+          youtubeChapters: st.youtubeChapters ?? [],
+        };
+      }
+    } catch {
+      // ignore unresponsive tab
+    }
+  }
+  return null;
+}
+
+async function enqueueHeadlessBatch(
+  items: Array<{ urlOrId: string; title?: string; channelName?: string }>
+): Promise<QueueJob[]> {
+  if (items.length === 0) return [];
+  const jobs = await loadQueueJobs();
+  let working = [...jobs];
+  const addedOrActive: QueueJob[] = [];
+
+  for (const item of items) {
+    const clean = item.urlOrId.trim();
+    const videoId = /^[A-Za-z0-9_-]{11}$/.test(clean) ? clean : extractYouTubeVideoId(clean);
+    if (!videoId) continue;
+
+    const activeExisting = working.find(
+      (j) =>
+        j.videoId === videoId &&
+        (j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing')
+    );
+    if (activeExisting) {
+      addedOrActive.push(activeExisting);
+      continue;
+    }
+
+    const now = Date.now();
+    const job: QueueJob = {
+      videoId,
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+      title: item.title?.trim() || `YouTube Video (${videoId})`,
+      channelName: item.channelName,
+      status: 'queued',
+      addedAt: now,
+      updatedAt: now,
+    };
+    working = [job, ...working.filter((j) => j.videoId !== videoId)].slice(0, 30);
+    addedOrActive.push(job);
+  }
+
+  if (addedOrActive.length > 0) {
+    await saveQueueJobs(working);
+    await broadcastQueueUpdated(working);
+    void processHeadlessQueue();
+  }
+  return addedOrActive;
+}
+
 async function enqueueHeadlessJob(
   urlOrId: string,
   title?: string,
   channelName?: string
 ): Promise<QueueJob | null> {
-  const clean = urlOrId.trim();
-  const videoId = /^[A-Za-z0-9_-]{11}$/.test(clean) ? clean : extractYouTubeVideoId(clean);
-  if (!videoId) return null;
+  const res = await enqueueHeadlessBatch([{ urlOrId, title, channelName }]);
+  return res[0] ?? null;
+}
 
-  const jobs = await loadQueueJobs();
-  const activeExisting = jobs.find(
-    (j) =>
-      j.videoId === videoId &&
-      (j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing')
-  );
-  if (activeExisting) {
-    return activeExisting;
+async function runSingleHeadlessJob(videoId: string): Promise<void> {
+  try {
+    await updateQueueJob(videoId, { status: 'fetching_transcript', error: undefined });
+    const settings = await loadSettings();
+
+    let capture =
+      (await tryCaptureFromExistingYouTubeTab(videoId)) ??
+      (await fetchWatchPageDataHeadless(videoId));
+    if (capture.meta?.title) {
+      await updateQueueJob(videoId, {
+        title: capture.meta.title,
+        channelName: capture.meta.channelName,
+      });
+    }
+
+    if (!capture.meta || capture.transcript.length === 0) {
+      const tabCapture = await captureViaHeadlessTab(videoId);
+      capture = {
+        meta: tabCapture.meta ?? capture.meta,
+        transcript:
+          tabCapture.transcript.length > 0 ? tabCapture.transcript : capture.transcript,
+        youtubeChapters:
+          tabCapture.youtubeChapters.length > 0
+            ? tabCapture.youtubeChapters
+            : capture.youtubeChapters,
+        error: tabCapture.error ?? capture.error,
+      };
+    }
+
+    if (!capture.meta || capture.transcript.length === 0) {
+      throw new Error(capture.error || 'No captions/transcript available for this video.');
+    }
+
+    await updateQueueJob(videoId, {
+      status: 'analyzing',
+      title: capture.meta.title,
+      channelName: capture.meta.channelName,
+    });
+
+    const sponsorSegments = settings.sponsorBlockEnabled
+      ? await fetchSponsorBlockSegments(videoId, settings.usePrivacyPrefix)
+      : [];
+    const stripped = stripSponsorSegmentsFromTranscript(capture.transcript, sponsorSegments);
+    const formatted = formatTranscriptForPrompt(stripped.cleanedCues);
+    const prompt = buildVideoAnalysisPrompt(
+      capture.meta,
+      formatted.text,
+      capture.youtubeChapters,
+      sponsorSegments.filter((s) => s.category !== 'chapter').length,
+      {
+        topicsCare: settings.topicsCare,
+        topicsIgnore: settings.topicsIgnore,
+      }
+    );
+
+    const rawResponse = await callAiProvider(settings, prompt, true);
+    const entry = buildKnowledgeEntryFromAnalysis(
+      capture.meta,
+      stripped.cleanedCues,
+      sponsorSegments.filter((s) => s.category !== 'chapter').length,
+      stripped.removedDurationSec,
+      rawResponse,
+      `${settings.apiProvider}:${settings.apiModel || 'default'}`
+    );
+
+    await putEntry(entry);
+    await pushAnalysisToYouTubeTabs(entry);
+    chrome.runtime.sendMessage({ type: 'ANALYSIS_COMPLETED', entry }).catch(() => {});
+    await maybeAutoPushGithub(settings);
+
+    await updateQueueJob(videoId, {
+      status: 'done',
+      title: entry.title,
+      channelName: entry.channelName,
+      chapterCount: entry.chapters.length,
+      entityCount: entry.entities.length,
+      error: undefined,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await updateQueueJob(videoId, { status: 'error', error: message });
   }
-
-  const now = Date.now();
-  const job: QueueJob = {
-    videoId,
-    url: `https://www.youtube.com/watch?v=${videoId}`,
-    title: title?.trim() || `YouTube Video (${videoId})`,
-    channelName,
-    status: 'queued',
-    addedAt: now,
-    updatedAt: now,
-  };
-
-  const filtered = jobs.filter((j) => j.videoId !== videoId);
-  const next = [job, ...filtered].slice(0, 30);
-  await saveQueueJobs(next);
-  await broadcastQueueUpdated(next);
-  void processHeadlessQueue();
-  return job;
 }
 
 async function processHeadlessQueue(): Promise<void> {
-  if (queueWorkerRunning) return;
-  queueWorkerRunning = true;
+  if (inFlightQueueVideoIds.size >= MAX_CONCURRENT_QUEUE_JOBS) return;
 
-  try {
-    // Process sequentially until no 'queued' items remain
-    while (true) {
-      const jobs = await loadQueueJobs();
-      // FIFO order from oldest queued item
-      const queued = [...jobs].reverse().find((j) => j.status === 'queued');
-      if (!queued) break;
+  const jobs = await loadQueueJobs();
+  const candidates = [...jobs]
+    .reverse()
+    .filter((j) => j.status === 'queued' && !inFlightQueueVideoIds.has(j.videoId));
 
-      const { videoId } = queued;
-      try {
-        await updateQueueJob(videoId, { status: 'fetching_transcript', error: undefined });
-        const settings = await loadSettings();
-
-        let capture = await fetchWatchPageDataHeadless(videoId);
-        if (capture.meta?.title) {
-          await updateQueueJob(videoId, {
-            title: capture.meta.title,
-            channelName: capture.meta.channelName,
-          });
-        }
-
-        if (!capture.meta || capture.transcript.length === 0) {
-          const tabCapture = await captureViaHeadlessTab(videoId);
-          capture = {
-            meta: tabCapture.meta ?? capture.meta,
-            transcript:
-              tabCapture.transcript.length > 0 ? tabCapture.transcript : capture.transcript,
-            youtubeChapters:
-              tabCapture.youtubeChapters.length > 0
-                ? tabCapture.youtubeChapters
-                : capture.youtubeChapters,
-            error: tabCapture.error ?? capture.error,
-          };
-        }
-
-        if (!capture.meta || capture.transcript.length === 0) {
-          throw new Error(capture.error || 'No captions/transcript available for this video.');
-        }
-
-        await updateQueueJob(videoId, {
-          status: 'analyzing',
-          title: capture.meta.title,
-          channelName: capture.meta.channelName,
-        });
-
-        const sponsorSegments = settings.sponsorBlockEnabled
-          ? await fetchSponsorBlockSegments(videoId, settings.usePrivacyPrefix)
-          : [];
-        const stripped = stripSponsorSegmentsFromTranscript(capture.transcript, sponsorSegments);
-        const formatted = formatTranscriptForPrompt(stripped.cleanedCues);
-        const prompt = buildVideoAnalysisPrompt(
-          capture.meta,
-          formatted.text,
-          capture.youtubeChapters,
-          sponsorSegments.filter((s) => s.category !== 'chapter').length,
-          {
-            topicsCare: settings.topicsCare,
-            topicsIgnore: settings.topicsIgnore,
-          }
-        );
-
-        const rawResponse = await callAiProvider(settings, prompt, true);
-        const entry = buildKnowledgeEntryFromAnalysis(
-          capture.meta,
-          stripped.cleanedCues,
-          sponsorSegments.filter((s) => s.category !== 'chapter').length,
-          stripped.removedDurationSec,
-          rawResponse,
-          `${settings.apiProvider}:${settings.apiModel || 'default'}`
-        );
-
-        await putEntry(entry);
-        await pushAnalysisToYouTubeTabs(entry);
-        await maybeAutoPushGithub(settings);
-
-        await updateQueueJob(videoId, {
-          status: 'done',
-          title: entry.title,
-          channelName: entry.channelName,
-          chapterCount: entry.chapters.length,
-          entityCount: entry.entities.length,
-          error: undefined,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        await updateQueueJob(videoId, { status: 'error', error: message });
-      }
-    }
-  } finally {
-    queueWorkerRunning = false;
+  for (const job of candidates) {
+    if (inFlightQueueVideoIds.size >= MAX_CONCURRENT_QUEUE_JOBS) break;
+    inFlightQueueVideoIds.add(job.videoId);
+    void runSingleHeadlessJob(job.videoId).finally(() => {
+      inFlightQueueVideoIds.delete(job.videoId);
+      void processHeadlessQueue();
+    });
   }
 }
 

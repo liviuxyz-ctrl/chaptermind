@@ -284,8 +284,8 @@ export type RuntimeMessage =
       sponsorSegments: SponsorSegment[];
       providerLabel?: string;
     }
-  | { type: 'GET_BRIDGE_TASK' }
-  | { type: 'CLEAR_BRIDGE_TASK' }
+  | { type: 'GET_BRIDGE_TASK'; provider?: SubscriptionProvider }
+  | { type: 'CLEAR_BRIDGE_TASK'; provider?: SubscriptionProvider }
   | { type: 'IMPORT_BRIDGE_RESPONSE'; taskId: string; rawText: string }
   | { type: 'ASK_KB_API'; question: string }
   | { type: 'TEST_API_CONNECTION'; settings?: ExtensionSettings }
@@ -294,6 +294,11 @@ export type RuntimeMessage =
   | { type: 'GITHUB_FETCH_ALL' }
   | { type: 'OPEN_SIDEPANEL' }
   | { type: 'QUEUE_ADD'; urlOrId: string; title?: string; channelName?: string }
+  | {
+      type: 'QUEUE_ADD_BATCH';
+      items: Array<{ urlOrId: string; title?: string; channelName?: string }>;
+    }
+  | { type: 'QUEUE_ADD_OPEN_TABS'; onlyUnsaved?: boolean }
   | { type: 'QUEUE_LIST' }
   | { type: 'QUEUE_REMOVE'; videoId: string }
   | { type: 'QUEUE_CLEAR_DONE' }
@@ -315,6 +320,7 @@ export type RuntimeMessage =
   | { type: 'SETTINGS_UPDATED'; settings: ExtensionSettings }
   // Broadcast to side panel
   | { type: 'VIDEO_STATE_CHANGED'; state: ActiveVideoState }
+  | { type: 'ANALYSIS_COMPLETED'; entry: KnowledgeEntry }
   | { type: 'BRIDGE_KB_ANSWER_READY'; question: string; answer: string; entries: KnowledgeEntry[] }
   | { type: 'BRIDGE_ANALYSIS_READY'; entry: KnowledgeEntry }
   | { type: 'QUEUE_UPDATED'; jobs: QueueJob[]; kbVideoIds?: string[] };

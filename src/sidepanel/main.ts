@@ -38,9 +38,19 @@ import {
   toggleChapterIgnore,
 } from '../shared/interests';
 import { parseGithubRepo } from '../shared/github-sync';
+import { extractAllYouTubeVideoIds, extractYouTubeVideoId } from '../shared/youtube-url';
 
 let activeTabId: number | null = null;
 let videoState: ActiveVideoState | null = null;
+const tabStateByTabId = new Map<number, ActiveVideoState>();
+const analyzingVideoIds = new Set<string>();
+let openYouTubeTabs: Array<{
+  id: number;
+  windowId: number;
+  videoId: string;
+  title: string;
+  active: boolean;
+}> = [];
 let settings: ExtensionSettings = { ...DEFAULT_SETTINGS };
 let kbEntries: KnowledgeEntry[] = [];
 let expandedKbIds = new Set<string>();
@@ -214,10 +224,134 @@ function getMergedChapters() {
   );
 }
 
+function isVideoBusyInQueue(videoId: string): boolean {
+  if (analyzingVideoIds.has(videoId)) return true;
+  return queueJobs.some(
+    (j) =>
+      j.videoId === videoId &&
+      (j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing')
+  );
+}
+
+function updateAnalyzeButtonState() {
+  const btn = document.getElementById('analyze-api-btn') as HTMLButtonElement | null;
+  if (!btn) return;
+  const vid = videoState?.meta?.videoId;
+  if (vid && analyzingVideoIds.has(vid)) {
+    btn.disabled = true;
+    btn.textContent = 'Analyzing...';
+  } else {
+    btn.disabled = false;
+    btn.textContent = 'Analyze';
+  }
+}
+
+function renderOpenTabsBar() {
+  const bar = document.getElementById('open-tabs-bar');
+  const list = document.getElementById('open-tabs-list');
+  const queueAllBtn = document.getElementById('queue-open-tabs-btn') as HTMLButtonElement | null;
+  if (!bar || !list) return;
+
+  if (openYouTubeTabs.length < 2) {
+    bar.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+
+  bar.classList.remove('hidden');
+  list.innerHTML = '';
+
+  const savedIds = new Set(kbEntries.map((e) => e.videoId));
+  let unsavedCount = 0;
+
+  for (const t of openYouTubeTabs) {
+    const isSaved = savedIds.has(t.videoId);
+    const isBusy = isVideoBusyInQueue(t.videoId);
+    if (!isSaved && !isBusy) unsavedCount += 1;
+
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = `open-tab-pill${t.id === activeTabId ? ' is-active' : ''}`;
+    pill.title = `${t.title}\nClick to switch to this YouTube tab`;
+
+    const dot = document.createElement('span');
+    dot.className = `open-tab-dot${isBusy ? ' is-busy' : isSaved ? ' is-kb' : ''}`;
+
+    const label = document.createElement('span');
+    label.className = 'open-tab-title';
+    label.textContent = t.title;
+
+    pill.append(dot, label);
+    pill.addEventListener('click', () => {
+      activeTabId = t.id;
+      const cached = tabStateByTabId.get(t.id);
+      if (cached) {
+        videoState = cached;
+        renderWatchingTab();
+        renderTranscriptTab();
+      }
+      renderOpenTabsBar();
+      void chrome.tabs
+        .update(t.id, { active: true })
+        .then(() => {
+          if (t.windowId) return chrome.windows.update(t.windowId, { focused: true });
+        })
+        .catch(() => {})
+        .finally(() => {
+          void syncActiveYouTubeTab();
+        });
+    });
+
+    list.appendChild(pill);
+  }
+
+  if (queueAllBtn) {
+    if (unsavedCount > 0) {
+      queueAllBtn.textContent = `Queue All (${unsavedCount})`;
+      queueAllBtn.disabled = false;
+    } else {
+      queueAllBtn.textContent = 'All in KB';
+      queueAllBtn.disabled = false;
+    }
+  }
+}
+
+async function refreshOpenYouTubeTabs() {
+  try {
+    const ytTabs = await chrome.tabs.query({
+      url: ['https://www.youtube.com/watch*', 'https://www.youtube.com/shorts/*'],
+    });
+    const next: typeof openYouTubeTabs = [];
+    for (const tab of ytTabs) {
+      if (!tab.id || !tab.url || tab.url.includes('cm_headless=1')) continue;
+      const videoId = extractYouTubeVideoId(tab.url);
+      if (!videoId) continue;
+      const cachedTitle = tabStateByTabId.get(tab.id)?.meta?.title;
+      const rawTitle =
+        cachedTitle ||
+        tab.title?.replace(/\s*-\s*YouTube$/, '').replace(/^\(\d+\)\s*/, '').trim() ||
+        videoId;
+      next.push({
+        id: tab.id,
+        windowId: tab.windowId,
+        videoId,
+        title: rawTitle,
+        active: Boolean(tab.active),
+      });
+    }
+    openYouTubeTabs = next;
+    renderOpenTabsBar();
+  } catch {
+    // ignore
+  }
+}
+
 function renderWatchingTab() {
   const noVideo = document.getElementById('no-video-card');
   const workspace = document.getElementById('video-workspace');
   if (!noVideo || !workspace) return;
+
+  updateAnalyzeButtonState();
 
   if (!videoState?.meta) {
     lastWatchingRenderSig = 'none';
@@ -936,6 +1070,7 @@ async function loadKb() {
   const res = await sendMessage<{ entries: KnowledgeEntry[] }>({ type: 'KB_LIST' });
   kbEntries = res.entries ?? [];
   renderKbTab();
+  renderOpenTabsBar();
 }
 
 async function syncActiveYouTubeTab() {
@@ -954,6 +1089,7 @@ async function syncActiveYouTubeTab() {
     videoState = null;
     renderWatchingTab();
     renderTranscriptTab();
+    void refreshOpenYouTubeTabs();
     return;
   }
 
@@ -962,12 +1098,16 @@ async function syncActiveYouTubeTab() {
       type: 'GET_ACTIVE_VIDEO_STATE',
     });
     videoState = res?.state ?? null;
+    if (videoState) {
+      tabStateByTabId.set(tab.id, videoState);
+    }
   } catch {
     videoState = null;
   }
 
   renderWatchingTab();
   renderTranscriptTab();
+  void refreshOpenYouTubeTabs();
 }
 
 function collectSettingsFromForm(): Partial<ExtensionSettings> {
@@ -1152,39 +1292,62 @@ function bindEvents() {
     renderWatchingTab();
   });
 
-  // Analyze via API
-  document.getElementById('analyze-api-btn')?.addEventListener('click', async (e) => {
+  // Analyze via API (safe across concurrent multi-tab / multi-video switches)
+  document.getElementById('analyze-api-btn')?.addEventListener('click', async () => {
     if (!videoState?.meta) return;
     if (videoState.transcript.length === 0) {
       showBanner('No transcript available for this video yet.', 'error');
       return;
     }
-    const btn = e.currentTarget as HTMLButtonElement;
-    btn.disabled = true;
-    btn.textContent = 'Analyzing...';
-    showBanner('Stripping SponsorBlock ads & analyzing transcript via AI API...', 'info');
+
+    const targetMeta = videoState.meta;
+    const targetVideoId = targetMeta.videoId;
+    if (analyzingVideoIds.has(targetVideoId)) return;
+
+    const targetTranscript = [...videoState.transcript];
+    const targetChapters = [...videoState.youtubeChapters];
+    const targetSponsors = [...videoState.sponsorSegments];
+
+    analyzingVideoIds.add(targetVideoId);
+    updateAnalyzeButtonState();
+    renderOpenTabsBar();
+    showBanner(`Analyzing "${targetMeta.title.slice(0, 42)}" via AI API...`, 'info');
 
     try {
       const res = await sendMessage<{ entry: KnowledgeEntry }>({
         type: 'ANALYZE_VIDEO_API',
-        meta: videoState.meta,
-        transcript: videoState.transcript,
-        youtubeChapters: videoState.youtubeChapters,
-        sponsorSegments: videoState.sponsorSegments,
+        meta: targetMeta,
+        transcript: targetTranscript,
+        youtubeChapters: targetChapters,
+        sponsorSegments: targetSponsors,
       });
-      videoState.kbEntry = res.entry;
-      videoState.aiSponsors = res.entry.aiSponsors;
-      renderWatchingTab();
+
+      for (const [tid, st] of tabStateByTabId.entries()) {
+        if (st.meta?.videoId === res.entry.videoId) {
+          tabStateByTabId.set(tid, {
+            ...st,
+            kbEntry: res.entry,
+            aiSponsors: res.entry.aiSponsors,
+          });
+        }
+      }
+
+      if (videoState?.meta?.videoId === res.entry.videoId) {
+        videoState.kbEntry = res.entry;
+        videoState.aiSponsors = res.entry.aiSponsors;
+        renderWatchingTab();
+      }
       await loadKb();
       showBanner(
-        `Saved ${res.entry.chapters.length} AI chapters & ${res.entry.entities.length} entities to KB!`,
+        `Saved ${res.entry.chapters.length} AI chapters for "${res.entry.title.slice(0, 36)}"!`,
         'success'
       );
     } catch (err) {
       showBanner(err instanceof Error ? err.message : 'API analysis failed', 'error');
     } finally {
-      btn.disabled = false;
-      btn.textContent = 'Analyze';
+      analyzingVideoIds.delete(targetVideoId);
+      updateAnalyzeButtonState();
+      renderOpenTabsBar();
     }
   });
 
@@ -1498,22 +1661,66 @@ function bindEvents() {
     });
   });
 
+  document.getElementById('queue-open-tabs-btn')?.addEventListener('click', async () => {
+    try {
+      const res = await sendMessage<{
+        ok: boolean;
+        queuedCount: number;
+        skippedSavedCount: number;
+        jobs: QueueJob[];
+      }>({ type: 'QUEUE_ADD_OPEN_TABS', onlyUnsaved: true });
+      queueJobs = res.jobs ?? [];
+      renderQueueCard();
+      renderOpenTabsBar();
+      if (res.queuedCount > 0) {
+        showBanner(
+          `Queued ${res.queuedCount} open YouTube video${res.queuedCount > 1 ? 's' : ''} in Library → Headless Queue!`,
+          'success'
+        );
+      } else {
+        showBanner(
+          `All ${res.skippedSavedCount} open YouTube videos are already in your Library.`,
+          'info'
+        );
+      }
+    } catch (err) {
+      showBanner(err instanceof Error ? err.message : 'Could not queue open tabs', 'error');
+    }
+  });
+
   document.getElementById('queue-add-btn')?.addEventListener('click', async () => {
     const input = document.getElementById('queue-url-input') as HTMLInputElement | null;
     const raw = input?.value.trim() ?? '';
     if (!raw) return;
-    const res = await sendMessage<{ ok: boolean; jobs: QueueJob[] }>({
-      type: 'QUEUE_ADD',
-      urlOrId: raw,
-    });
-    if (!res.ok) {
+    const ids = extractAllYouTubeVideoIds(raw);
+    if (ids.length === 0) {
       showBanner('Could not recognize a valid YouTube URL or 11-char video ID.', 'error');
       return;
     }
+
+    if (ids.length === 1) {
+      const res = await sendMessage<{ ok: boolean; jobs: QueueJob[] }>({
+        type: 'QUEUE_ADD',
+        urlOrId: ids[0]!,
+      });
+      if (!res.ok) {
+        showBanner('Could not recognize a valid YouTube URL or 11-char video ID.', 'error');
+        return;
+      }
+      queueJobs = res.jobs ?? [];
+      showBanner('Queued video for headless background analysis!', 'success');
+    } else {
+      const res = await sendMessage<{ ok: boolean; addedCount: number; jobs: QueueJob[] }>({
+        type: 'QUEUE_ADD_BATCH',
+        items: ids.map((id) => ({ urlOrId: id })),
+      });
+      queueJobs = res.jobs ?? [];
+      showBanner(`Queued ${res.addedCount} videos for headless analysis!`, 'success');
+    }
+
     if (input) input.value = '';
-    queueJobs = res.jobs ?? [];
     renderQueueCard();
-    showBanner('Queued video for headless background analysis!', 'success');
+    renderOpenTabsBar();
   });
 
   document.getElementById('queue-url-input')?.addEventListener('keydown', (e) => {
@@ -1588,8 +1795,10 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
       return;
     }
     if (sender.tab?.id) {
+      tabStateByTabId.set(sender.tab.id, msg.state);
       // Never let an inactive background YouTube tab overwrite the currently inspected video
       if (!sender.tab.active && sender.tab.id !== activeTabId) {
+        renderOpenTabsBar();
         return;
       }
       if (sender.tab.active) {
@@ -1604,12 +1813,38 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
       renderWatchingTab();
       renderTranscriptTab();
     }
+    renderOpenTabsBar();
   } else if (msg.type === 'SETTINGS_UPDATED') {
     settings = msg.settings;
     renderWatchingTab();
     renderTranscriptTab();
     renderSettingsInterestChips();
+  } else if (msg.type === 'ANALYSIS_COMPLETED') {
+    for (const [tid, st] of tabStateByTabId.entries()) {
+      if (st.meta?.videoId === msg.entry.videoId) {
+        tabStateByTabId.set(tid, {
+          ...st,
+          kbEntry: msg.entry,
+          aiSponsors: msg.entry.aiSponsors,
+        });
+      }
+    }
+    if (videoState?.meta?.videoId === msg.entry.videoId) {
+      videoState.kbEntry = msg.entry;
+      videoState.aiSponsors = msg.entry.aiSponsors;
+      renderWatchingTab();
+    }
+    void loadKb();
   } else if (msg.type === 'BRIDGE_ANALYSIS_READY') {
+    for (const [tid, st] of tabStateByTabId.entries()) {
+      if (st.meta?.videoId === msg.entry.videoId) {
+        tabStateByTabId.set(tid, {
+          ...st,
+          kbEntry: msg.entry,
+          aiSponsors: msg.entry.aiSponsors,
+        });
+      }
+    }
     if (videoState?.meta?.videoId === msg.entry.videoId) {
       videoState.kbEntry = msg.entry;
       videoState.aiSponsors = msg.entry.aiSponsors;
@@ -1630,6 +1865,8 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
   } else if (msg.type === 'QUEUE_UPDATED') {
     queueJobs = msg.jobs;
     renderQueueCard();
+    renderOpenTabsBar();
+    updateAnalyzeButtonState();
     if (queueJobs.some((j) => j.status === 'done')) {
       void loadKb();
     }
@@ -1766,7 +2003,15 @@ async function loadQueue() {
 
 chrome.tabs.onActivated.addListener(() => void syncActiveYouTubeTab());
 chrome.windows?.onFocusChanged?.addListener(() => void syncActiveYouTubeTab());
+chrome.tabs.onCreated?.addListener(() => void refreshOpenYouTubeTabs());
+chrome.tabs.onRemoved?.addListener((tabId) => {
+  tabStateByTabId.delete(tabId);
+  void refreshOpenYouTubeTabs();
+});
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url || changeInfo.title || changeInfo.status === 'complete') {
+    void refreshOpenYouTubeTabs();
+  }
   if (tabId === activeTabId && (changeInfo.status === 'complete' || changeInfo.url)) {
     void syncActiveYouTubeTab();
   }
@@ -1778,6 +2023,7 @@ async function init() {
   settings = res.settings;
   renderSettingsTab();
   await Promise.all([syncActiveYouTubeTab(), loadKb(), loadQueue()]);
+  await refreshOpenYouTubeTabs();
 }
 
 void init();

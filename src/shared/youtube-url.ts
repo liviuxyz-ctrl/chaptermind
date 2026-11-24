@@ -32,3 +32,25 @@ export function extractYouTubeVideoId(rawUrl: string): string | null {
 function isValidVideoId(id: string | null | undefined): id is string {
   return Boolean(id && /^[A-Za-z0-9_-]{11}$/.test(id));
 }
+
+/**
+ * Extracts unique canonical 11-char YouTube video IDs from whitespace/comma/newline separated
+ * URLs or raw video IDs, preserving input order.
+ */
+export function extractAllYouTubeVideoIds(input: string): string[] {
+  if (!input) return [];
+  const tokens = input
+    .split(/[\s,]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const token of tokens) {
+    const id = isValidVideoId(token) ? token : extractYouTubeVideoId(token);
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      result.push(id);
+    }
+  }
+  return result;
+}
