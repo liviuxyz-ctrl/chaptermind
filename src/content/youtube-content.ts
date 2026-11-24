@@ -974,7 +974,9 @@ function renderInPageStripActiveOnly() {
 }
 
 function broadcastStateToPanel(force = false) {
+  if (IS_HEADLESS_TAB) return;
   if (!force && !state.meta) return;
+  if (state.meta && state.meta.videoId !== currentVideoId) return;
   void sendRuntimeMessage({
     type: 'VIDEO_STATE_CHANGED',
     state: { ...state },
@@ -983,14 +985,16 @@ function broadcastStateToPanel(force = false) {
   });
 }
 
-async function loadVideoContext(videoId: string) {
+async function loadVideoContext(videoId: string, forceRefresh = false) {
   currentVideoId = videoId;
+  headlessReportedVideoId = null;
   skippedOrHandledUuids.clear();
   undoneUuids.clear();
   skippedChapterIds.clear();
   undoneChapterIds.clear();
   activeMutedUuid = null;
 
+  state.meta = null;
   state.youtubeChapters = [];
   state.sponsorSegments = [];
   state.aiSponsors = [];
@@ -1005,7 +1009,12 @@ async function loadVideoContext(videoId: string) {
     '*'
   );
   window.postMessage(
-    { source: 'chaptermind-isolated', type: 'CHAPTERMIND_FETCH_TRANSCRIPT', videoId },
+    {
+      source: 'chaptermind-isolated',
+      type: 'CHAPTERMIND_FETCH_TRANSCRIPT',
+      videoId,
+      forceRefresh,
+    },
     '*'
   );
 
@@ -1115,6 +1124,23 @@ window.addEventListener('message', (event) => {
 
 chrome.runtime.onMessage.addListener((msg: RuntimeMessage, _sender, sendResponse) => {
   if (msg.type === 'GET_ACTIVE_VIDEO_STATE') {
+    const vid = getWatchVideoId();
+    if (vid && vid !== currentVideoId) {
+      void loadVideoContext(vid);
+      sendResponse({
+        state: {
+          ...state,
+          meta: null,
+          youtubeChapters: [],
+          sponsorSegments: [],
+          aiSponsors: [],
+          transcript: [],
+          transcriptStatus: 'loading',
+          kbEntry: null,
+        },
+      });
+      return false;
+    }
     const video = getVideoElement();
     if (video) {
       state.currentTimeSec = video.currentTime;
@@ -1133,7 +1159,7 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, _sender, sendResponse
   if (msg.type === 'REFRESH_VIDEO') {
     const vid = getWatchVideoId();
     if (vid) {
-      void loadVideoContext(vid).then(() => sendResponse({ ok: true }));
+      void loadVideoContext(vid, true).then(() => sendResponse({ ok: true }));
       return true;
     }
     sendResponse({ ok: false });

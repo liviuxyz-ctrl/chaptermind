@@ -940,16 +940,17 @@ async function loadKb() {
 
 async function syncActiveYouTubeTab() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !tab.url?.includes('youtube.com/watch')) {
+  const isHeadless = (u?: string) => Boolean(u && u.includes('cm_headless=1'));
+  if (!tab?.id || !tab.url?.includes('youtube.com/watch') || isHeadless(tab.url)) {
     const ytTabs = await chrome.tabs.query({
       url: ['https://www.youtube.com/watch*', 'https://www.youtube.com/shorts/*'],
       currentWindow: true,
     });
-    tab = ytTabs[0];
+    tab = ytTabs.find((t) => !isHeadless(t.url)) ?? undefined;
   }
   activeTabId = tab?.id ?? null;
 
-  if (!tab?.id || !tab.url?.includes('youtube.com/')) {
+  if (!tab?.id || !tab.url?.includes('youtube.com/') || isHeadless(tab.url)) {
     videoState = null;
     renderWatchingTab();
     renderTranscriptTab();
@@ -1583,8 +1584,17 @@ function bindEvents() {
 
 chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
   if (msg.type === 'VIDEO_STATE_CHANGED') {
+    if (sender.tab?.url?.includes('cm_headless=1')) {
+      return;
+    }
     if (sender.tab?.id) {
-      activeTabId = sender.tab.id;
+      // Never let an inactive background YouTube tab overwrite the currently inspected video
+      if (!sender.tab.active && sender.tab.id !== activeTabId) {
+        return;
+      }
+      if (sender.tab.active) {
+        activeTabId = sender.tab.id;
+      }
     }
     videoState = msg.state;
     const nextSig = getWatchingRenderSignature();
@@ -1755,6 +1765,7 @@ async function loadQueue() {
 }
 
 chrome.tabs.onActivated.addListener(() => void syncActiveYouTubeTab());
+chrome.windows?.onFocusChanged?.addListener(() => void syncActiveYouTubeTab());
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (tabId === activeTabId && (changeInfo.status === 'complete' || changeInfo.url)) {
     void syncActiveYouTubeTab();
