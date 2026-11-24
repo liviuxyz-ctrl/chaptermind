@@ -296,6 +296,7 @@ async function run() {
 
     // Test Settings persistence
     await spPage.click('.tab[data-tab="settings"]');
+    await spPage.locator('details.accordion summary', { hasText: 'AI Subscription Bridge' }).click();
     await spPage.selectOption('#set-sub-provider', 'claude');
     await spPage.click('#save-settings-btn');
     await spPage.waitForTimeout(400);
@@ -419,7 +420,9 @@ async function run() {
     const thirdCardClass = await spChapterCards.nth(2).getAttribute('class');
     assert.ok(thirdCardClass?.includes('is-skip'), `Expected Nano Banana Pro 2 card to have is-skip class, got ${thirdCardClass}`);
 
-    // Add a custom ignore topic in the quick filter bar
+    // Open the Auto-Skip Filter drawer and add a custom ignore topic
+    await spPage.click('#interest-drawer summary');
+    await spPage.waitForTimeout(200);
     await spPage.fill('#quick-ignore-input', 'useless small models');
     await spPage.click('#quick-ignore-add-btn');
     await spPage.waitForTimeout(300);

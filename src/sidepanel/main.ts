@@ -267,12 +267,17 @@ function renderWatchingTab() {
   const kbSaved = document.getElementById('kb-saved-badge') as HTMLElement;
   kbSaved.classList.toggle('hidden', !videoState.kbEntry);
 
+  const tldrWrap = document.getElementById('tldr-wrap');
   const tldrEl = document.getElementById('video-tldr') as HTMLElement;
+  const tldrToggle = document.getElementById('tldr-toggle-btn') as HTMLButtonElement | null;
   if (videoState.kbEntry?.tldr) {
     tldrEl.textContent = videoState.kbEntry.tldr;
-    tldrEl.classList.remove('hidden');
+    tldrWrap?.classList.remove('hidden');
+    if (tldrToggle) {
+      tldrToggle.classList.toggle('hidden', videoState.kbEntry.tldr.length < 130);
+    }
   } else {
-    tldrEl.classList.add('hidden');
+    tldrWrap?.classList.add('hidden');
   }
 
   // Timeline bar
@@ -321,7 +326,7 @@ function renderWatchingTab() {
   timeline.appendChild(playhead);
 
   // Mode chips
-  document.querySelectorAll('#chapter-mode-chips .chip').forEach((chip) => {
+  document.querySelectorAll('#chapter-mode-chips .seg-btn').forEach((chip) => {
     const mode = (chip as HTMLElement).dataset.mode;
     chip.classList.toggle('active', mode === settings.chapterFilterMode);
   });
@@ -389,24 +394,10 @@ function renderWatchingTab() {
       const right = document.createElement('div');
       right.className = 'item-right';
 
-      if (rel.relevance === 'skip') {
-        const skipBadge = document.createElement('span');
-        skipBadge.className = 'src-badge src-skip';
-        skipBadge.textContent = 'SKIP';
-        right.appendChild(skipBadge);
-      } else if (rel.relevance === 'must_watch') {
-        const careBadge = document.createElement('span');
-        careBadge.className = 'src-badge src-care';
-        careBadge.textContent = '★';
-        right.appendChild(careBadge);
-      }
-
-      const src = document.createElement('span');
-      src.className = `src-badge src-${ch.source}`;
-      src.textContent = ch.source === 'sponsorblock' ? 'SB' : ch.source;
-
       const fb = document.createElement('div');
-      fb.className = 'feedback-btns';
+      fb.className = `feedback-btns${
+        rel.relevance === 'must_watch' || rel.relevance === 'skip' ? ' has-active' : ''
+      }`;
 
       const careBtn = document.createElement('button');
       careBtn.type = 'button';
@@ -427,7 +418,7 @@ function renderWatchingTab() {
       const skipBtn = document.createElement('button');
       skipBtn.type = 'button';
       skipBtn.className = `fb-btn${rel.relevance === 'skip' ? ' is-active-skip' : ''}`;
-      skipBtn.textContent = '👎';
+      skipBtn.textContent = '⊘';
       skipBtn.title = "Don't care — auto-skip this topic in future videos too";
       skipBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -441,7 +432,7 @@ function renderWatchingTab() {
       });
 
       fb.append(careBtn, skipBtn);
-      right.append(src, fb);
+      right.appendChild(fb);
 
       top.append(left, right);
       card.appendChild(top);
@@ -633,6 +624,11 @@ function renderInterestFilterBar() {
   const hideEl = document.getElementById('hide-skipped-toggle') as HTMLInputElement | null;
   if (hideEl) hideEl.checked = settings.hideIgnoredChapters;
 
+  const countLabel = document.getElementById('interest-count-label');
+  if (countLabel) {
+    countLabel.textContent = String(settings.topicsIgnore.length);
+  }
+
   renderTopicChips('quick-ignore-chips', settings.topicsIgnore, 'ignore', (topic) => {
     void saveInterestUpdate({ topicsIgnore: removeTopic(settings.topicsIgnore, topic) });
   });
@@ -793,8 +789,17 @@ function renderKbTab() {
         tkList.className = 'stack-sm';
         for (const tk of entry.keyTakeaways) {
           const row = document.createElement('div');
-          row.className = 'item-sub';
-          row.textContent = `[${formatTimestamp(tk.timestampSec)}] ${tk.text}`;
+          row.className = 'takeaway-link';
+          row.title = 'Jump to timestamp';
+          row.addEventListener('click', () => {
+            void openOrSeekVideo(entry.videoId, tk.timestampSec);
+          });
+          const tkTs = document.createElement('span');
+          tkTs.className = 'ts-badge';
+          tkTs.textContent = formatTimestamp(tk.timestampSec);
+          const tkText = document.createElement('span');
+          tkText.textContent = tk.text;
+          row.append(tkTs, tkText);
           tkList.appendChild(row);
         }
         detail.appendChild(tkList);
@@ -1101,7 +1106,15 @@ function bindEvents() {
     if (target) void seekVideo(target.startTime);
   });
 
-  document.querySelectorAll('#chapter-mode-chips .chip').forEach((chip) => {
+  document.getElementById('tldr-toggle-btn')?.addEventListener('click', (e) => {
+    const tldr = document.getElementById('video-tldr');
+    const btn = e.currentTarget as HTMLButtonElement;
+    if (!tldr) return;
+    const expanded = !tldr.classList.toggle('clamped');
+    btn.textContent = expanded ? 'Less' : 'More';
+  });
+
+  document.querySelectorAll('#chapter-mode-chips .seg-btn').forEach((chip) => {
     chip.addEventListener('click', async () => {
       const mode = (chip as HTMLElement).dataset.mode as ChapterFilterMode;
       const res = await sendMessage<{ settings: ExtensionSettings }>({
@@ -1150,7 +1163,7 @@ function bindEvents() {
       showBanner(err instanceof Error ? err.message : 'API analysis failed', 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = '✨ Analyze via API';
+      btn.textContent = 'Analyze';
     }
   });
 

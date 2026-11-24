@@ -512,12 +512,12 @@ function renderInPageStrip() {
   const style = document.createElement('style');
   style.textContent = `
     .cm-bar {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: #12151e;
-      border: 1px solid #262c3d;
+      font-family: "YouTube Sans", "Roboto", system-ui, -apple-system, sans-serif;
+      background: #0f0f0f;
+      border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 12px;
       padding: 8px 12px;
-      color: #e5e7eb;
+      color: #f1f1f1;
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -537,23 +537,22 @@ function renderInPageStrip() {
     }
     .cm-brand {
       font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
+      font-weight: 600;
       color: #34d399;
-      background: rgba(16, 185, 129, 0.14);
-      border: 1px solid rgba(16, 185, 129, 0.35);
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.25);
       padding: 2px 7px;
-      border-radius: 999px;
+      border-radius: 6px;
       flex-shrink: 0;
     }
     .cm-active {
-      font-size: 13px;
-      font-weight: 600;
-      color: #f9fafb;
+      font-size: 12.5px;
+      font-weight: 500;
+      color: #f1f1f1;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      max-width: 420px;
+      max-width: 440px;
     }
     .cm-actions {
       display: flex;
@@ -562,27 +561,26 @@ function renderInPageStrip() {
       flex-wrap: wrap;
     }
     .cm-btn {
-      background: #1d2230;
-      color: #e5e7eb;
-      border: 1px solid #2e364a;
-      border-radius: 7px;
-      padding: 4px 9px;
-      font-size: 12px;
-      font-weight: 600;
+      background: #272727;
+      color: #f1f1f1;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 11.5px;
+      font-weight: 500;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 4px;
     }
-    .cm-btn:hover { background: #272e40; border-color: #4b5563; }
-    .cm-btn-highlight { border-color: rgba(255, 22, 132, 0.5); color: #ff69b4; }
-    .cm-btn-panel { border-color: rgba(56, 189, 248, 0.45); color: #7dd3fc; }
+    .cm-btn:hover { background: #3f3f3f; }
+    .cm-btn-highlight { color: #f472b6; }
+    .cm-btn-panel { color: #7dd3fc; }
     .cm-sb-badge {
       font-size: 11px;
-      font-weight: 600;
-      color: #4ade80;
-      background: rgba(34, 197, 94, 0.12);
-      border: 1px solid rgba(34, 197, 94, 0.3);
+      font-weight: 500;
+      color: #6ee7b7;
+      background: rgba(16, 185, 129, 0.1);
       border-radius: 999px;
       padding: 2px 8px;
     }
@@ -599,34 +597,36 @@ function renderInPageStrip() {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      background: #191d29;
-      border: 1px solid #2a3142;
-      color: #cbd5e1;
+      background: #212121;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #d4d4d8;
       border-radius: 8px;
       padding: 5px 10px;
       font-size: 12px;
       cursor: pointer;
       white-space: nowrap;
     }
-    .cm-pill:hover { background: #23293a; color: #ffffff; }
+    .cm-pill:hover { background: #303030; color: #ffffff; }
     .cm-pill.active {
-      background: rgba(56, 189, 248, 0.16);
-      border-color: #38bdf8;
-      color: #ffffff;
+      background: #f1f1f1;
+      border-color: #f1f1f1;
+      color: #0f0f0f;
       font-weight: 600;
     }
+    .cm-pill.active .cm-pill-time {
+      color: #52525b;
+    }
     .cm-pill.is-skip {
-      opacity: 0.52;
-      border-color: rgba(249, 115, 22, 0.45);
+      opacity: 0.45;
       text-decoration: line-through;
     }
     .cm-pill.is-care {
-      border-color: rgba(16, 185, 129, 0.55);
+      border-color: rgba(16, 185, 129, 0.45);
     }
     .cm-pill-time {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 11px;
-      color: #94a3b8;
+      color: #a1a1aa;
     }
     .cm-src-dot {
       width: 6px;
@@ -636,7 +636,7 @@ function renderInPageStrip() {
     }
     .cm-empty {
       font-size: 12px;
-      color: #94a3b8;
+      color: #a1a1aa;
     }
   `;
 
