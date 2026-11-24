@@ -34,6 +34,7 @@ import {
   extractTopicFromChapter,
   removeTopic,
 } from '../shared/interests';
+import { parseGithubRepo } from '../shared/github-sync';
 
 let activeTabId: number | null = null;
 let videoState: ActiveVideoState | null = null;
@@ -1366,6 +1367,40 @@ function bindEvents() {
       btn.disabled = false;
     }
   });
+
+  const openConfiguredGithubRepo = () => {
+    const formRepo = (document.getElementById('set-gh-repo') as HTMLInputElement | null)?.value.trim();
+    const formBranch = (
+      document.getElementById('set-gh-branch') as HTMLInputElement | null
+    )?.value.trim();
+    const formFolder = (
+      document.getElementById('set-gh-folder') as HTMLInputElement | null
+    )?.value.trim();
+
+    const repoInput = formRepo || settings.githubRepo;
+    if (!repoInput.trim()) {
+      showBanner('Set your GitHub repo in Settings → GitHub Knowledge Base Sync first.', 'error');
+      return;
+    }
+
+    try {
+      const { owner, repo } = parseGithubRepo(repoInput);
+      const branch = formBranch || settings.githubBranch || 'main';
+      const folder = (formFolder || settings.githubFolder || 'knowledge-base').replace(
+        /^\/+|\/+$/g,
+        ''
+      );
+      const url = folder
+        ? `https://github.com/${owner}/${repo}/tree/${encodeURIComponent(branch)}/${folder}`
+        : `https://github.com/${owner}/${repo}`;
+      void chrome.tabs.create({ url });
+    } catch (err) {
+      showBanner(err instanceof Error ? err.message : 'Invalid GitHub repository', 'error');
+    }
+  };
+
+  document.getElementById('git-open-btn')?.addEventListener('click', openConfiguredGithubRepo);
+  document.getElementById('open-gh-repo-btn')?.addEventListener('click', openConfiguredGithubRepo);
 
   document.getElementById('export-all-md-btn')?.addEventListener('click', () => {
     if (kbEntries.length === 0) return;
