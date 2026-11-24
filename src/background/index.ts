@@ -235,28 +235,40 @@ async function pushAnalysisToYouTubeTabs(entry: KnowledgeEntry, preferredTabId?:
   }
 }
 
-let githubPushInFlight = false;
-let githubPushPendingSettings: ExtensionSettings | null = null;
+let githubPushChain: Promise<void> = Promise.resolve();
+let autoPushQueued = false;
 
-async function maybeAutoPushGithub(settings: ExtensionSettings) {
+function enqueueGithubTask<T>(fn: () => Promise<T>): Promise<T> {
+  const next = githubPushChain.then(fn, fn);
+  githubPushChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
+async function maybeAutoPushGithub(settings: ExtensionSettings): Promise<void> {
   if (!settings.githubAutoPush || !settings.githubRepo.trim() || !settings.githubToken.trim()) {
     return;
   }
-  if (githubPushInFlight) {
-    githubPushPendingSettings = settings;
-    return;
-  }
-  githubPushInFlight = true;
-  let currentSettings: ExtensionSettings | null = settings;
+  if (autoPushQueued) return;
+  autoPushQueued = true;
   try {
-    while (currentSettings) {
-      githubPushPendingSettings = null;
+    await enqueueGithubTask(async () => {
+      autoPushQueued = false;
+      const latestSettings = await loadSettings();
+      if (
+        !latestSettings.githubAutoPush ||
+        !latestSettings.githubRepo.trim() ||
+        !latestSettings.githubToken.trim()
+      ) {
+        return;
+      }
       const allEntries = await getAllEntries();
-      await pushKnowledgeBaseToGithub(currentSettings, allEntries);
-      currentSettings = githubPushPendingSettings;
-    }
+      await pushKnowledgeBaseToGithub(latestSettings, allEntries);
+    });
   } finally {
-    githubPushInFlight = false;
+    autoPushQueued = false;
   }
 }
 
@@ -531,9 +543,11 @@ async function handleMessage(
     }
 
     case 'GITHUB_PUSH_ALL': {
-      const settings = await loadSettings();
-      const entries = await getAllEntries();
-      const result = await pushKnowledgeBaseToGithub(settings, entries);
+      const result = await enqueueGithubTask(async () => {
+        const settings = await loadSettings();
+        const entries = await getAllEntries();
+        return await pushKnowledgeBaseToGithub(settings, entries);
+      });
       return { ok: true, ...result };
     }
 
@@ -1023,7 +1037,9 @@ async function runSingleHeadlessJob(videoId: string): Promise<void> {
     await putEntry(entry);
     await pushAnalysisToYouTubeTabs(entry);
     chrome.runtime.sendMessage({ type: 'ANALYSIS_COMPLETED', entry }).catch(() => {});
-    await maybeAutoPushGithub(settings);
+    await maybeAutoPushGithub(settings).catch((err) => {
+      console.warn('ChapterMind auto-push skipped:', err);
+    });
 
     await updateQueueJob(videoId, {
       status: 'done',

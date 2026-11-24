@@ -158,4 +158,67 @@ describe('GitHub Knowledge Base Sync', () => {
     expect(() => normalizeGithubToken('sk-proj-wrong-key')).toThrow(/github_pat_/i);
     expect(() => normalizeGithubToken('github_pat_' + 'a'.repeat(150))).toThrow(/pasted twice/i);
   });
+
+  it('bypasses HTTP cache and retries HTTP 409 SHA conflicts automatically', async () => {
+    const cacheModes: Array<RequestCache | undefined> = [];
+    let indexPutCalls = 0;
+    const remoteFiles = new Map<string, { sha: string; content: string }>([
+      ['knowledge-base/index.json', { sha: 'stale-sha', content: '{"version":1,"videos":[]}' }],
+    ]);
+
+    const mockFetch = async (url: RequestInfo | URL, init?: RequestInit) => {
+      cacheModes.push(init?.cache);
+      const match = String(url).match(/\/contents\/([^?]+)/);
+      const filePath = decodeURIComponent(match?.[1] || '');
+      const method = (init?.method || 'GET').toUpperCase();
+
+      if (method === 'GET') {
+        const hit = remoteFiles.get(filePath);
+        if (!hit) return new Response('Not Found', { status: 404 });
+        return new Response(
+          JSON.stringify({ sha: hit.sha, encoding: 'base64', content: utf8ToBase64(hit.content) }),
+          { status: 200 }
+        );
+      }
+
+      if (method === 'PUT') {
+        const body = JSON.parse(String(init?.body)) as { content: string; sha?: string };
+        if (filePath === 'knowledge-base/index.json') {
+          indexPutCalls += 1;
+          if (indexPutCalls === 1) {
+            // Simulate another commit updating index.json SHA before our PUT arrived
+            remoteFiles.set(filePath, { sha: 'fresh-sha', content: '{"version":1,"videos":[]}' });
+            return new Response(
+              JSON.stringify({ message: `${filePath} does not match ${body.sha}` }),
+              { status: 409 }
+            );
+          }
+          expect(body.sha).toBe('fresh-sha');
+        }
+        remoteFiles.set(filePath, {
+          sha: `sha-${indexPutCalls + remoteFiles.size}`,
+          content: base64ToUtf8(body.content),
+        });
+        return new Response(JSON.stringify({ content: { path: filePath } }), { status: 200 });
+      }
+
+      return new Response('Method Not Allowed', { status: 405 });
+    };
+
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      githubRepo: 'user/kb',
+      githubBranch: 'main',
+      githubFolder: 'knowledge-base',
+      githubToken: 'ghp_test',
+    };
+    const res = await pushKnowledgeBaseToGithub(
+      settings,
+      [makeEntry()],
+      mockFetch as typeof fetch
+    );
+    expect(res.pushedFiles).toBe(3);
+    expect(indexPutCalls).toBe(2);
+    expect(cacheModes.every((m) => m === 'no-store')).toBe(true);
+  });
 });

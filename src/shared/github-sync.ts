@@ -105,6 +105,7 @@ export async function testGithubConnection(
   const { owner, repo } = parseGithubRepo(settings.githubRepo);
   const res = await fetchFn(`${GITHUB_API_BASE}/repos/${owner}/${repo}`, {
     headers: buildHeaders(settings.githubToken),
+    cache: 'no-store',
   });
   if (!res.ok) {
     const errText = await res.text();
@@ -145,7 +146,7 @@ async function getRemoteFile(
   const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(
     branch
   )}`;
-  const res = await fetchFn(url, { headers: buildHeaders(token) });
+  const res = await fetchFn(url, { headers: buildHeaders(token), cache: 'no-store' });
   if (res.status === 404) return null;
   if (!res.ok) {
     const errText = await res.text();
@@ -167,35 +168,46 @@ async function upsertRemoteFile(
   token: string,
   fetchFn: typeof fetch
 ): Promise<'pushed' | 'skipped'> {
-  const existing = await getRemoteFile(owner, repo, branch, filePath, token, fetchFn);
-  if (existing && existing.text === textContent) {
-    return 'skipped';
-  }
-
   const encodedPath = encodeGithubPath(filePath);
   const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${encodedPath}`;
-  const body: Record<string, unknown> = {
-    message: commitMessage,
-    content: utf8ToBase64(textContent),
-    branch,
-  };
-  if (existing?.sha) {
-    body.sha = existing.sha;
-  }
+  const maxAttempts = 3;
 
-  const res = await fetchFn(url, {
-    method: 'PUT',
-    headers: {
-      ...buildHeaders(token),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const existing = await getRemoteFile(owner, repo, branch, filePath, token, fetchFn);
+    if (existing && existing.text === textContent) {
+      return 'skipped';
+    }
 
-  if (!res.ok) {
+    const body: Record<string, unknown> = {
+      message: commitMessage,
+      content: utf8ToBase64(textContent),
+      branch,
+    };
+    if (existing?.sha) {
+      body.sha = existing.sha;
+    }
+
+    const res = await fetchFn(url, {
+      method: 'PUT',
+      headers: {
+        ...buildHeaders(token),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    });
+
+    if (res.ok) {
+      return 'pushed';
+    }
+
     const errText = await res.text();
+    if (res.status === 409 && attempt < maxAttempts - 1) {
+      continue;
+    }
     throw new Error(`GitHub write failed (${filePath}) HTTP ${res.status}: ${errText.slice(0, 240)}`);
   }
+
   return 'pushed';
 }
 
@@ -360,7 +372,7 @@ export async function fetchKnowledgeBaseFromGithub(
     const dirUrl = `${GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${encodeGithubPath(
       `${folder}/videos`
     )}?ref=${encodeURIComponent(branch)}`;
-    const res = await fetchFn(dirUrl, { headers: buildHeaders(token) });
+    const res = await fetchFn(dirUrl, { headers: buildHeaders(token), cache: 'no-store' });
     if (res.status === 404) {
       return { entriesToSave: [], fetchedCount: 0, totalRemote: 0 };
     }
