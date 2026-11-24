@@ -1,0 +1,21 @@
+{
+  "name": "chaptermind-yt-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "YouTube SponsorBlock, AI visual chapter navigation, transcript-only extraction, and local AI video knowledge base.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "node scripts/e2e-test.mjs",
+    "check": "npm run typecheck && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.313",
+    "esbuild": "^0.25.0",
+    "playwright-core": "^1.65.1",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
