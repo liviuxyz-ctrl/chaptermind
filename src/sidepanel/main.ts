@@ -26,6 +26,8 @@ import {
 import {
   exportAllToMarkdown,
   exportEntryToMarkdown,
+  getActiveEntries,
+  getTrashedEntries,
   searchKnowledgeBase,
 } from '../shared/kb-storage';
 import type { QueueJob } from '../shared/types';
@@ -58,6 +60,9 @@ let chapterSearch = '';
 let transcriptSearch = '';
 let kbSearch = '';
 let kbEntityFilter = 'all';
+let kbCategoryFilter = 'all';
+let kbViewingTrash = false;
+let addingCategoryInline = false;
 let lastWatchingRenderSig = '';
 
 function sendMessage<T = unknown>(msg: RuntimeMessage): Promise<T> {
@@ -819,29 +824,192 @@ async function openOrSeekVideo(videoId: string, seconds: number) {
   });
 }
 
-function renderKbTab() {
-  const entityCount = kbEntries.reduce((acc, e) => acc + e.entities.length, 0);
-  const strippedSec = kbEntries.reduce((acc, e) => acc + (e.sponsorTimeStrippedSec || 0), 0);
+function renderCategoryChips() {
+  const wrap = document.getElementById('kb-category-chips');
+  if (!wrap) return;
+  wrap.innerHTML = '';
 
-  (document.getElementById('stat-videos') as HTMLElement).textContent = String(kbEntries.length);
+  const categories = settings.kbCategories?.length
+    ? settings.kbCategories
+    : ['Work', 'AI & Tech', 'Learning', 'Personal'];
+
+  const makeChip = (label: string, value: string) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `chip${!kbViewingTrash && kbCategoryFilter === value ? ' active' : ''}`;
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      kbViewingTrash = false;
+      kbCategoryFilter = value;
+      renderKbTab();
+    });
+    return btn;
+  };
+
+  wrap.appendChild(makeChip('All', 'all'));
+  for (const cat of categories) {
+    wrap.appendChild(makeChip(cat, cat));
+  }
+  wrap.appendChild(makeChip('Uncategorized', 'uncategorized'));
+
+  if (addingCategoryInline) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'input input-sm';
+    input.placeholder = 'New category...';
+    input.style.width = '110px';
+    input.style.padding = '2px 6px';
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const val = input.value.trim();
+        addingCategoryInline = false;
+        if (val) {
+          const nextCats = addUniqueTopic(categories, val);
+          kbCategoryFilter = val;
+          kbViewingTrash = false;
+          void saveInterestUpdate({ kbCategories: nextCats }).then(() => {
+            renderKbTab();
+          });
+        } else {
+          renderKbTab();
+        }
+      } else if (e.key === 'Escape') {
+        addingCategoryInline = false;
+        renderKbTab();
+      }
+    });
+    input.addEventListener('blur', () => {
+      addingCategoryInline = false;
+      renderKbTab();
+    });
+    wrap.appendChild(input);
+    window.setTimeout(() => input.focus(), 0);
+  } else {
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'chip';
+    addBtn.textContent = '+';
+    addBtn.title = 'Add custom Library category (e.g. Work)';
+    addBtn.addEventListener('click', () => {
+      addingCategoryInline = true;
+      renderKbTab();
+    });
+    wrap.appendChild(addBtn);
+  }
+}
+
+function renderKbTab() {
+  const activeEntries = getActiveEntries(kbEntries);
+  const trashedEntries = getTrashedEntries(kbEntries);
+  const entityCount = activeEntries.reduce((acc, e) => acc + e.entities.length, 0);
+  const strippedSec = activeEntries.reduce((acc, e) => acc + (e.sponsorTimeStrippedSec || 0), 0);
+
+  (document.getElementById('stat-videos') as HTMLElement).textContent = String(activeEntries.length);
   (document.getElementById('stat-entities') as HTMLElement).textContent = String(entityCount);
   (document.getElementById('stat-saved-time') as HTMLElement).textContent =
     `${Math.round(strippedSec / 60)}m`;
 
+  renderCategoryChips();
+
+  const trashBtn = document.getElementById('kb-trash-tab-btn');
+  if (trashBtn) {
+    trashBtn.textContent = `🗑 Trash (${trashedEntries.length})`;
+    trashBtn.classList.toggle('active', kbViewingTrash);
+  }
+  const trashBanner = document.getElementById('kb-trash-banner');
+  const trashInfo = document.getElementById('kb-trash-info');
+  const entityChips = document.getElementById('kb-entity-chips');
+  const retentionDays = settings.trashRetentionDays || 30;
+  trashBanner?.classList.toggle('hidden', !kbViewingTrash);
+  entityChips?.classList.toggle('hidden', kbViewingTrash);
+  if (trashInfo) {
+    trashInfo.textContent = `${trashedEntries.length} in Recycle Bin (kept ${retentionDays}d before auto-purge).`;
+  }
+
   const list = document.getElementById('kb-list') as HTMLElement;
   list.textContent = '';
 
-  const results = searchKnowledgeBase(kbEntries, kbSearch, kbEntityFilter);
+  if (kbViewingTrash) {
+    const filteredTrash = searchKnowledgeBase(trashedEntries, kbSearch, 'all', 'all');
+    if (filteredTrash.length === 0) {
+      const p = document.createElement('p');
+      p.className = 'muted-small';
+      p.textContent = 'Recycle Bin is empty.';
+      list.appendChild(p);
+      return;
+    }
+
+    for (const { entry } of filteredTrash) {
+      const card = document.createElement('div');
+      card.className = 'item-card';
+
+      const top = document.createElement('div');
+      top.className = 'item-top';
+
+      const title = document.createElement('span');
+      title.className = 'item-title';
+      title.textContent = entry.title;
+
+      const daysLeft = Math.max(
+        1,
+        Math.ceil(retentionDays - (Date.now() - (entry.trashedAt ?? Date.now())) / 86_400_000)
+      );
+      const rowActions = document.createElement('div');
+      rowActions.className = 'kb-row-actions';
+
+      const daysBadge = document.createElement('span');
+      daysBadge.className = 'muted-small';
+      daysBadge.textContent = `${daysLeft}d left`;
+
+      const restoreBtn = document.createElement('button');
+      restoreBtn.type = 'button';
+      restoreBtn.className = 'btn btn-xs';
+      restoreBtn.textContent = '↩ Restore';
+      restoreBtn.addEventListener('click', async () => {
+        await sendMessage({ type: 'KB_RESTORE', videoId: entry.videoId });
+        await loadKb();
+        showBanner(`Restored "${entry.title.slice(0, 36)}" to Library!`, 'success');
+      });
+
+      const delPermBtn = document.createElement('button');
+      delPermBtn.type = 'button';
+      delPermBtn.className = 'btn btn-xs btn-danger';
+      delPermBtn.textContent = 'Delete';
+      delPermBtn.title = 'Delete permanently now';
+      delPermBtn.addEventListener('click', async () => {
+        await sendMessage({ type: 'KB_DELETE', videoId: entry.videoId });
+        await loadKb();
+      });
+
+      rowActions.append(daysBadge, restoreBtn, delPermBtn);
+      top.append(title, rowActions);
+
+      const sub = document.createElement('div');
+      sub.className = 'item-sub';
+      sub.textContent = `${entry.channelName}${entry.category ? ` · ${entry.category}` : ''}`;
+
+      card.append(top, sub);
+      list.appendChild(card);
+    }
+    return;
+  }
+
+  const results = searchKnowledgeBase(activeEntries, kbSearch, kbEntityFilter, kbCategoryFilter);
   if (results.length === 0) {
     const p = document.createElement('p');
     p.className = 'muted-small';
     p.textContent =
-      kbEntries.length === 0
+      activeEntries.length === 0
         ? 'No saved videos yet. Analyze a YouTube video to build your AI Knowledge Base.'
         : 'No matching entries found.';
     list.appendChild(p);
     return;
   }
+
+  const categories = settings.kbCategories?.length
+    ? settings.kbCategories
+    : ['Work', 'AI & Tech', 'Learning', 'Personal'];
 
   for (const { entry, bestTimestampSec, matchSnippet } of results) {
     const card = document.createElement('div');
@@ -868,11 +1036,34 @@ function renderKbTab() {
 
     left.append(ts, title);
 
+    const rowActions = document.createElement('div');
+    rowActions.className = 'kb-row-actions';
+
+    if (entry.category?.trim()) {
+      const catBadge = document.createElement('span');
+      catBadge.className = 'kb-cat-badge';
+      catBadge.textContent = entry.category;
+      rowActions.appendChild(catBadge);
+    }
+
     const metaBadge = document.createElement('span');
     metaBadge.className = 'src-badge src-ai';
     metaBadge.textContent = `${entry.chapters.length} ch`;
 
-    top.append(left, metaBadge);
+    const quickTrashBtn = document.createElement('button');
+    quickTrashBtn.type = 'button';
+    quickTrashBtn.className = 'kb-trash-btn';
+    quickTrashBtn.textContent = '🗑';
+    quickTrashBtn.title = `Move to Recycle Bin (kept ${retentionDays} days)`;
+    quickTrashBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await sendMessage({ type: 'KB_TRASH', videoId: entry.videoId });
+      await loadKb();
+      showBanner(`Moved to Recycle Bin (kept ${retentionDays}d).`, 'info');
+    });
+
+    rowActions.append(metaBadge, quickTrashBtn);
+    top.append(left, rowActions);
 
     const sub = document.createElement('div');
     sub.className = 'item-sub';
@@ -959,6 +1150,40 @@ function renderKbTab() {
         detail.appendChild(tkList);
       }
 
+      const catRow = document.createElement('div');
+      catRow.className = 'kb-cat-select-row';
+      const catLabel = document.createElement('span');
+      catLabel.textContent = 'Category';
+      const catSel = document.createElement('select');
+      catSel.className = 'input kb-cat-select';
+      const noneOpt = document.createElement('option');
+      noneOpt.value = '';
+      noneOpt.textContent = 'Uncategorized';
+      catSel.appendChild(noneOpt);
+      for (const c of categories) {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        catSel.appendChild(opt);
+      }
+      if (entry.category && !categories.includes(entry.category)) {
+        const extraOpt = document.createElement('option');
+        extraOpt.value = entry.category;
+        extraOpt.textContent = entry.category;
+        catSel.appendChild(extraOpt);
+      }
+      catSel.value = entry.category || '';
+      catSel.addEventListener('change', async () => {
+        await sendMessage({
+          type: 'KB_SET_CATEGORY',
+          videoId: entry.videoId,
+          category: catSel.value,
+        });
+        await loadKb();
+      });
+      catRow.append(catLabel, catSel);
+      detail.appendChild(catRow);
+
       const actions = document.createElement('div');
       actions.className = 'row-end';
 
@@ -982,16 +1207,17 @@ function renderKbTab() {
         );
       });
 
-      const delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'btn btn-xs btn-danger';
-      delBtn.textContent = 'Delete';
-      delBtn.addEventListener('click', async () => {
-        await sendMessage({ type: 'KB_DELETE', videoId: entry.videoId });
+      const trashBtnCard = document.createElement('button');
+      trashBtnCard.type = 'button';
+      trashBtnCard.className = 'btn btn-xs btn-danger';
+      trashBtnCard.textContent = 'Move to Trash';
+      trashBtnCard.addEventListener('click', async () => {
+        await sendMessage({ type: 'KB_TRASH', videoId: entry.videoId });
         await loadKb();
+        showBanner(`Moved "${entry.title.slice(0, 36)}" to Recycle Bin.`, 'info');
       });
 
-      actions.append(openBtn, mdBtn, delBtn);
+      actions.append(openBtn, mdBtn, trashBtnCard);
       detail.appendChild(actions);
       card.appendChild(detail);
     }
@@ -1600,17 +1826,30 @@ function bindEvents() {
   document.getElementById('open-gh-repo-btn')?.addEventListener('click', openConfiguredGithubRepo);
 
   document.getElementById('export-all-md-btn')?.addEventListener('click', () => {
-    if (kbEntries.length === 0) return;
-    downloadTextFile('chaptermind-knowledge-base.md', exportAllToMarkdown(kbEntries), 'text/markdown');
+    const active = getActiveEntries(kbEntries);
+    if (active.length === 0) return;
+    downloadTextFile('chaptermind-knowledge-base.md', exportAllToMarkdown(active), 'text/markdown');
   });
 
   document.getElementById('export-all-json-btn')?.addEventListener('click', () => {
-    if (kbEntries.length === 0) return;
+    const active = getActiveEntries(kbEntries);
+    if (active.length === 0) return;
     downloadTextFile(
       'chaptermind-knowledge-base.json',
-      JSON.stringify(kbEntries, null, 2),
+      JSON.stringify(active, null, 2),
       'application/json'
     );
+  });
+
+  document.getElementById('kb-trash-tab-btn')?.addEventListener('click', () => {
+    kbViewingTrash = !kbViewingTrash;
+    renderKbTab();
+  });
+
+  document.getElementById('kb-empty-trash-btn')?.addEventListener('click', async () => {
+    const res = await sendMessage<{ ok: boolean; deletedCount: number }>({ type: 'KB_EMPTY_TRASH' });
+    await loadKb();
+    showBanner(`Permanently deleted ${res.deletedCount} trashed item(s).`, 'info');
   });
 
   document.getElementById('import-json-input')?.addEventListener('change', async (e) => {
@@ -1922,11 +2161,34 @@ function renderQueueCard() {
     title.textContent = job.title || job.videoId;
     title.title = job.title || job.videoId;
 
+    const headActions = document.createElement('div');
+    headActions.className = 'kb-row-actions';
+
+    if (job.status === 'fetching_transcript' || job.status === 'analyzing') {
+      const forceRetryBtn = document.createElement('button');
+      forceRetryBtn.type = 'button';
+      forceRetryBtn.className = 'btn btn-ghost btn-xs';
+      forceRetryBtn.textContent = '↻';
+      forceRetryBtn.title = 'Cancel stuck attempt & retry now';
+      forceRetryBtn.addEventListener('click', async () => {
+        await sendMessage({ type: 'QUEUE_REMOVE', videoId: job.videoId });
+        const res = await sendMessage<{ jobs: QueueJob[] }>({
+          type: 'QUEUE_ADD',
+          urlOrId: job.videoId,
+          title: job.title,
+          channelName: job.channelName,
+        });
+        queueJobs = res.jobs ?? [];
+        renderQueueCard();
+      });
+      headActions.appendChild(forceRetryBtn);
+    }
+
     const rmBtn = document.createElement('button');
     rmBtn.type = 'button';
     rmBtn.className = 'btn btn-ghost btn-xs';
     rmBtn.textContent = '✕';
-    rmBtn.title = 'Remove from queue';
+    rmBtn.title = 'Remove / cancel from queue';
     rmBtn.addEventListener('click', () => {
       void sendMessage<{ jobs: QueueJob[] }>({
         type: 'QUEUE_REMOVE',
@@ -1937,7 +2199,8 @@ function renderQueueCard() {
       });
     });
 
-    head.append(title, rmBtn);
+    headActions.appendChild(rmBtn);
+    head.append(title, headActions);
 
     const meta = document.createElement('div');
     meta.className = 'queue-item-meta';

@@ -1291,12 +1291,15 @@ function ensureThumbQueueStyles() {
   style.textContent = `
     .cm-menu-host {
       display: inline-flex !important;
-      flex-direction: column !important;
-      align-items: flex-end !important;
+      flex-direction: row !important;
+      align-items: center !important;
+      justify-content: flex-end !important;
       gap: 4px !important;
-      height: auto !important;
+      width: auto !important;
+      min-width: max-content !important;
       overflow: visible !important;
-      flex-shrink: 0 !important;
+      opacity: 1 !important;
+      visibility: visible !important;
       pointer-events: auto !important;
       z-index: 30 !important;
     }
@@ -1403,20 +1406,19 @@ function scanThumbnailQueueButtons() {
 
     const menuHost =
       card.querySelector<HTMLElement>(
-        '.yt-lockup-metadata-view-model__menu-button, .yt-lockup-metadata-view-model-wiz__menu-button'
+        '.ytLockupMetadataViewModelMenuButton, .yt-lockup-metadata-view-model__menu-button, .yt-lockup-metadata-view-model-wiz__menu-button, #menu'
       ) ??
-      card.querySelector<HTMLElement>('#menu') ??
       card.querySelector<HTMLElement>('ytd-menu-renderer')?.parentElement ??
-      card.querySelector<HTMLElement>('yt-lockup-metadata-view-model, #details, #meta');
+      null;
 
     if (!menuHost || menuHost.closest('a')) continue;
     if (menuHost.querySelector('.cm-thumb-queue-btn')) continue;
 
     const titleEl = card.querySelector(
-      '#video-title, h3 a, .yt-lockup-metadata-view-model__title, .yt-lockup-metadata-view-model-wiz__title'
+      '#video-title, h3 a, .ytLockupMetadataViewModelTitle, .yt-lockup-metadata-view-model__title, .yt-lockup-metadata-view-model-wiz__title'
     );
     const channelEl = card.querySelector(
-      'ytd-channel-name #text, #channel-name a, .yt-content-metadata-view-model__metadata-row span'
+      'ytd-channel-name #text, #channel-name a, .ytContentMetadataViewModelMetadataRow span, .yt-content-metadata-view-model__metadata-row span'
     );
     const title = titleEl?.textContent?.trim() || `YouTube Video (${vid})`;
     const channelName = channelEl?.textContent?.trim() || undefined;
@@ -1455,7 +1457,7 @@ function scanThumbnailQueueButtons() {
     });
 
     menuHost.classList.add('cm-menu-host');
-    menuHost.appendChild(btn);
+    menuHost.insertBefore(btn, menuHost.firstChild);
   }
 }
 

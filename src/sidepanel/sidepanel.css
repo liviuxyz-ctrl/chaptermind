@@ -1182,3 +1182,90 @@ textarea:focus,
 .open-tab-dot.is-busy {
   background: #fbbf24;
 }
+
+.kb-cat-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.kb-cat-bar .chip-group {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-wrap: nowrap;
+}
+
+.kb-cat-bar .chip-group::-webkit-scrollbar {
+  display: none;
+}
+
+.chip-trash {
+  flex-shrink: 0;
+}
+
+.chip-trash.active {
+  border-color: rgba(244, 63, 94, 0.55);
+  color: #fda4af;
+  background: rgba(244, 63, 94, 0.12);
+}
+
+.trash-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(244, 63, 94, 0.08);
+}
+
+.kb-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.kb-cat-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.1);
+  color: #7dd3fc;
+}
+
+.kb-trash-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.kb-trash-btn:hover {
+  color: #fda4af;
+  background: rgba(244, 63, 94, 0.14);
+}
+
+.kb-cat-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.kb-cat-select {
+  width: 140px;
+  padding: 2px 6px;
+  font-size: 11px;
+}

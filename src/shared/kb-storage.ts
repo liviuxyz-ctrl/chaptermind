@@ -88,15 +88,47 @@ function tokenizeQuery(query: string): string[] {
     .filter((t) => t.length >= 2);
 }
 
+export function getActiveEntries(entries: KnowledgeEntry[]): KnowledgeEntry[] {
+  return entries.filter((e) => !e.trashedAt);
+}
+
+export function getTrashedEntries(entries: KnowledgeEntry[]): KnowledgeEntry[] {
+  return entries
+    .filter((e) => Boolean(e.trashedAt))
+    .sort((a, b) => (b.trashedAt ?? 0) - (a.trashedAt ?? 0));
+}
+
+export function getExpiredTrashIds(
+  entries: KnowledgeEntry[],
+  retentionDays = 30,
+  now = Date.now()
+): string[] {
+  const days = Math.max(1, retentionDays || 30);
+  const cutoff = days * 86_400_000;
+  return entries
+    .filter((e) => Boolean(e.trashedAt && now - (e.trashedAt ?? 0) >= cutoff))
+    .map((e) => e.videoId);
+}
+
 export function searchKnowledgeBase(
   entries: KnowledgeEntry[],
   query: string,
-  entityTypeFilter = 'all'
+  entityTypeFilter = 'all',
+  categoryFilter = 'all'
 ): KbSearchResult[] {
+  const filteredByCategory =
+    categoryFilter === 'uncategorized'
+      ? entries.filter((entry) => !entry.category?.trim())
+      : categoryFilter && categoryFilter !== 'all'
+        ? entries.filter(
+            (entry) => entry.category?.trim().toLowerCase() === categoryFilter.trim().toLowerCase()
+          )
+        : entries;
+
   const filteredByEntity =
     entityTypeFilter && entityTypeFilter !== 'all'
-      ? entries.filter((entry) => entry.entities.some((e) => e.type === entityTypeFilter))
-      : entries;
+      ? filteredByCategory.filter((entry) => entry.entities.some((e) => e.type === entityTypeFilter))
+      : filteredByCategory;
 
   const trimmed = query.trim().toLowerCase();
   if (!trimmed) {
@@ -226,6 +258,7 @@ export function exportEntryToMarkdown(entry: KnowledgeEntry): string {
     `sponsor_stripped_sec: ${entry.sponsorTimeStrippedSec}`,
     `saved_date: "${dateStr}"`,
     `ai_provider: "${entry.aiProviderUsed}"`,
+    ...(entry.category?.trim() ? [`category: "${entry.category.trim().replace(/"/g, '\\"')}"`] : []),
     'tags:',
     tagsYaml || '  - youtube-ai',
     '---',

@@ -25,8 +25,11 @@ import {
 import { callAiProvider } from '../shared/ai-client';
 import {
   deleteEntry,
+  getActiveEntries,
   getAllEntries,
   getEntry,
+  getExpiredTrashIds,
+  getTrashedEntries,
   putEntry,
   searchKnowledgeBase,
 } from '../shared/kb-storage';
@@ -59,6 +62,14 @@ async function loadSettings(): Promise<ExtensionSettings> {
     topicsAllow: Array.isArray(partial.topicsAllow)
       ? partial.topicsAllow
       : [...DEFAULT_SETTINGS.topicsAllow],
+    kbCategories:
+      Array.isArray(partial.kbCategories) && partial.kbCategories.length > 0
+        ? partial.kbCategories
+        : [...DEFAULT_SETTINGS.kbCategories],
+    trashRetentionDays:
+      typeof partial.trashRetentionDays === 'number' && partial.trashRetentionDays > 0
+        ? partial.trashRetentionDays
+        : DEFAULT_SETTINGS.trashRetentionDays,
     categoryRules: {
       ...DEFAULT_SETTINGS.categoryRules,
       ...(partial.categoryRules ?? {}),
@@ -272,6 +283,14 @@ async function maybeAutoPushGithub(settings: ExtensionSettings): Promise<void> {
   }
 }
 
+async function purgeExpiredTrash(retentionDays = 30): Promise<void> {
+  const entries = await getAllEntries();
+  const expiredIds = getExpiredTrashIds(entries, retentionDays);
+  for (const id of expiredIds) {
+    await deleteEntry(id);
+  }
+}
+
 async function handleMessage(
   msg: RuntimeMessage,
   sender: chrome.runtime.MessageSender
@@ -307,6 +326,8 @@ async function handleMessage(
     }
 
     case 'KB_LIST': {
+      const settings = await loadSettings();
+      await purgeExpiredTrash(settings.trashRetentionDays);
       const entries = await getAllEntries();
       return { entries };
     }
@@ -318,7 +339,53 @@ async function handleMessage(
 
     case 'KB_DELETE': {
       await deleteEntry(msg.videoId);
+      await broadcastQueueUpdated();
       return { ok: true };
+    }
+
+    case 'KB_SET_CATEGORY': {
+      const entry = await getEntry(msg.videoId);
+      if (!entry) return { ok: false, error: 'Library entry not found.' };
+      const category = msg.category.trim();
+      const updated: KnowledgeEntry = {
+        ...entry,
+        category: category || undefined,
+        updatedAt: Date.now(),
+      };
+      await putEntry(updated);
+      return { ok: true, entry: updated };
+    }
+
+    case 'KB_TRASH': {
+      const entry = await getEntry(msg.videoId);
+      if (!entry) return { ok: false, error: 'Library entry not found.' };
+      const updated: KnowledgeEntry = {
+        ...entry,
+        trashedAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      await putEntry(updated);
+      await broadcastQueueUpdated();
+      return { ok: true, entry: updated };
+    }
+
+    case 'KB_RESTORE': {
+      const entry = await getEntry(msg.videoId);
+      if (!entry) return { ok: false, error: 'Library entry not found.' };
+      const updated: KnowledgeEntry = { ...entry, updatedAt: Date.now() };
+      delete updated.trashedAt;
+      await putEntry(updated);
+      await broadcastQueueUpdated();
+      return { ok: true, entry: updated };
+    }
+
+    case 'KB_EMPTY_TRASH': {
+      const trashed = getTrashedEntries(await getAllEntries());
+      for (const item of trashed) {
+        await deleteEntry(item.videoId);
+      }
+      await broadcastQueueUpdated();
+      return { ok: true, deletedCount: trashed.length };
     }
 
     case 'KB_IMPORT_BULK': {
@@ -433,7 +500,7 @@ async function handleMessage(
       } else {
         const question = (msg.question ?? '').trim();
         if (!question) throw new Error('Enter a question first.');
-        const allEntries = await getAllEntries();
+        const allEntries = getActiveEntries(await getAllEntries());
         if (allEntries.length === 0) {
           throw new Error('Your Knowledge Base is empty. Analyze at least one video first.');
         }
@@ -498,7 +565,7 @@ async function handleMessage(
       }
 
       if (task.kind === 'ask_kb') {
-        const allEntries = await getAllEntries();
+        const allEntries = getActiveEntries(await getAllEntries());
         const usedEntries = task.matchedVideoIds?.length
           ? allEntries.filter((e) => task.matchedVideoIds?.includes(e.videoId))
           : allEntries.slice(0, 5);
@@ -519,7 +586,7 @@ async function handleMessage(
 
     case 'ASK_KB_API': {
       const settings = await loadSettings();
-      const allEntries = await getAllEntries();
+      const allEntries = getActiveEntries(await getAllEntries());
       if (allEntries.length === 0) {
         throw new Error('Your Knowledge Base is empty. Save at least one video first.');
       }
@@ -582,12 +649,15 @@ async function handleMessage(
     }
 
     case 'KB_IDS_GET': {
-      const entries = await getAllEntries();
+      const entries = getActiveEntries(await getAllEntries());
       return { ids: entries.map((e) => e.videoId) };
     }
 
     case 'QUEUE_LIST': {
-      const jobs = await loadQueueJobs();
+      const jobs = await recoverStaleQueueJobs();
+      if (jobs.some((j) => j.status === 'queued')) {
+        void processHeadlessQueue();
+      }
       return { jobs };
     }
 
@@ -607,7 +677,7 @@ async function handleMessage(
       const ytTabs = await chrome.tabs.query({
         url: ['https://www.youtube.com/watch*', 'https://www.youtube.com/shorts/*'],
       });
-      const existingEntries = msg.onlyUnsaved !== false ? await getAllEntries() : [];
+      const existingEntries = msg.onlyUnsaved !== false ? getActiveEntries(await getAllEntries()) : [];
       const savedIds = new Set(existingEntries.map((e) => e.videoId));
       const seenVid = new Set<string>();
       const batchItems: Array<{ urlOrId: string; title?: string; channelName?: string }> = [];
@@ -639,9 +709,18 @@ async function handleMessage(
     }
 
     case 'QUEUE_REMOVE': {
+      const pending = pendingHeadlessCaptures.get(msg.videoId);
+      if (pending) {
+        pendingHeadlessCaptures.delete(msg.videoId);
+        clearTimeout(pending.timer);
+        chrome.tabs.remove(pending.tabId).catch(() => {});
+        pending.reject(new Error('Cancelled by user.'));
+      }
+      inFlightQueueVideoIds.delete(msg.videoId);
       const jobs = (await loadQueueJobs()).filter((j) => j.videoId !== msg.videoId);
       await saveQueueJobs(jobs);
       await broadcastQueueUpdated(jobs);
+      void processHeadlessQueue();
       return { ok: true, jobs };
     }
 
@@ -708,7 +787,7 @@ async function saveQueueJobs(jobs: QueueJob[]): Promise<void> {
 
 async function broadcastQueueUpdated(jobs?: QueueJob[]): Promise<void> {
   const nextJobs = jobs ?? (await loadQueueJobs());
-  const kbVideoIds = (await getAllEntries()).map((e) => e.videoId);
+  const kbVideoIds = getActiveEntries(await getAllEntries()).map((e) => e.videoId);
   chrome.runtime
     .sendMessage({ type: 'QUEUE_UPDATED', jobs: nextJobs, kbVideoIds })
     .catch(() => {});
@@ -866,10 +945,32 @@ async function captureViaHeadlessTab(videoId: string): Promise<HeadlessCaptureRe
       pendingHeadlessCaptures.delete(videoId);
       chrome.tabs.remove(tabId).catch(() => {});
       reject(new Error('Timed out waiting for headless YouTube transcript extraction.'));
-    }, 28_000);
+    }, 45_000);
 
     pendingHeadlessCaptures.set(videoId, { tabId, resolve, reject, timer });
   });
+}
+
+async function recoverStaleQueueJobs(): Promise<QueueJob[]> {
+  const jobs = await loadQueueJobs();
+  const now = Date.now();
+  let changed = false;
+  const next = jobs.map((job) => {
+    const isRunning = job.status === 'fetching_transcript' || job.status === 'analyzing';
+    if (!isRunning) return job;
+    const notRunningInWorker = !inFlightQueueVideoIds.has(job.videoId);
+    const staleTimeout = now - (job.updatedAt || job.addedAt) > 90_000;
+    if (notRunningInWorker || staleTimeout) {
+      changed = true;
+      return { ...job, status: 'queued' as const, error: undefined, updatedAt: now };
+    }
+    return job;
+  });
+  if (changed) {
+    await saveQueueJobs(next);
+    await broadcastQueueUpdated(next);
+  }
+  return next;
 }
 
 async function updateQueueJob(
@@ -1058,7 +1159,7 @@ async function runSingleHeadlessJob(videoId: string): Promise<void> {
 async function processHeadlessQueue(): Promise<void> {
   if (inFlightQueueVideoIds.size >= MAX_CONCURRENT_QUEUE_JOBS) return;
 
-  const jobs = await loadQueueJobs();
+  const jobs = await recoverStaleQueueJobs();
   const candidates = [...jobs]
     .reverse()
     .filter((j) => j.status === 'queued' && !inFlightQueueVideoIds.has(j.videoId));
@@ -1120,10 +1221,19 @@ chrome.runtime.onInstalled?.addListener(() => {
 
 chrome.runtime.onStartup?.addListener(() => {
   ensureContextMenus();
-  void processHeadlessQueue();
+  void recoverStaleQueueJobs().then((jobs) => {
+    if (jobs.some((j) => j.status === 'queued')) {
+      void processHeadlessQueue();
+    }
+  });
 });
 
 ensureContextMenus();
+void recoverStaleQueueJobs().then((jobs) => {
+  if (jobs.some((j) => j.status === 'queued')) {
+    void processHeadlessQueue();
+  }
+});
 
 chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender, sendResponse) => {
   handleMessage(msg, sender)

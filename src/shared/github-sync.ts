@@ -247,11 +247,12 @@ export async function pushKnowledgeBaseToGithub(
   const { owner, repo } = parseGithubRepo(settings.githubRepo);
   const branch = settings.githubBranch.trim() || 'main';
   const folder = normalizeFolder(settings.githubFolder);
+  const activeEntries = entries.filter((e) => !e.trashedAt);
 
   let pushedFiles = 0;
   let skippedFiles = 0;
 
-  for (const entry of entries) {
+  for (const entry of activeEntries) {
     const jsonPath = `${folder}/videos/${entry.videoId}.json`;
     const jsonRes = await upsertRemoteFile(
       owner,
@@ -286,7 +287,7 @@ export async function pushKnowledgeBaseToGithub(
     updatedAt: Date.now(),
     topicsIgnore: settings.topicsIgnore,
     topicsCare: settings.topicsCare,
-    videos: entries.map((e) => ({
+    videos: activeEntries.map((e) => ({
       videoId: e.videoId,
       title: e.title,
       channelName: e.channelName,
@@ -300,7 +301,7 @@ export async function pushKnowledgeBaseToGithub(
     branch,
     `${folder}/index.json`,
     JSON.stringify(indexDoc, null, 2),
-    `ChapterMind sync index (${entries.length} videos)`,
+    `ChapterMind sync index (${activeEntries.length} videos)`,
     token,
     fetchFn
   );
@@ -310,7 +311,7 @@ export async function pushKnowledgeBaseToGithub(
   return {
     pushedFiles,
     skippedFiles,
-    videoCount: entries.length,
+    videoCount: activeEntries.length,
     repoUrl: `https://github.com/${owner}/${repo}`,
   };
 }

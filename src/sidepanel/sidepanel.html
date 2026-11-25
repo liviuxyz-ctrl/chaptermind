@@ -275,6 +275,10 @@
             type="search"
             placeholder="Search models, repos, topics, or quotes..."
           />
+          <div class="kb-cat-bar">
+            <div class="chip-group" id="kb-category-chips"></div>
+            <button id="kb-trash-tab-btn" class="chip chip-trash" type="button" title="Recycle Bin (kept 30 days)">🗑 Trash (0)</button>
+          </div>
           <div class="chip-group" id="kb-entity-chips">
             <button class="chip active" data-entity="all">All</button>
             <button class="chip" data-entity="model">Models</button>
@@ -283,6 +287,11 @@
             <button class="chip" data-entity="paper">Papers</button>
             <button class="chip" data-entity="concept">Concepts</button>
           </div>
+        </div>
+
+        <div id="kb-trash-banner" class="trash-banner hidden">
+          <span id="kb-trash-info" class="muted-small">Items in Recycle Bin are kept for 30 days.</span>
+          <button id="kb-empty-trash-btn" class="btn btn-ghost btn-xs btn-danger" type="button">Empty Trash</button>
         </div>
 
         <div id="kb-list" class="flat-list"></div>

@@ -95,7 +95,8 @@ describe('GitHub Knowledge Base Sync', () => {
     expect(remoteFiles.has('knowledge-base/videos/vid123.json')).toBe(true);
     expect(remoteFiles.has('knowledge-base/index.json')).toBe(true);
 
-    // Second push with identical entry skips json and md (index.json updates timestamp)
+    // Wait briefly so updatedAt differs from first push on fast CPUs, skipping json & md
+    await new Promise((r) => setTimeout(r, 5));
     const second = await pushKnowledgeBaseToGithub(settings, [entry], mockFetch as typeof fetch);
     expect(second.skippedFiles).toBe(2);
     expect(second.pushedFiles).toBe(1);

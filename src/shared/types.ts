@@ -114,6 +114,8 @@ export interface KnowledgeEntry {
   savedAt: number;
   updatedAt: number;
   aiProviderUsed: string;
+  category?: string;
+  trashedAt?: number;
   tldr: string;
   chapters: Chapter[];
   aiSponsors: SponsorSegment[];
@@ -156,6 +158,8 @@ export interface ExtensionSettings {
   githubFolder: string;
   githubToken: string;
   githubAutoPush: boolean;
+  kbCategories: string[];
+  trashRetentionDays: number;
 }
 
 export const DEFAULT_CATEGORY_RULES: Record<SponsorCategory, CategoryRule> = {
@@ -211,6 +215,8 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   githubFolder: 'knowledge-base',
   githubToken: '',
   githubAutoPush: false,
+  kbCategories: ['Work', 'AI & Tech', 'Learning', 'Personal'],
+  trashRetentionDays: 30,
 };
 
 export interface BridgeTask {
@@ -311,6 +317,10 @@ export type RuntimeMessage =
       error?: string;
     }
   | { type: 'KB_IDS_GET' }
+  | { type: 'KB_SET_CATEGORY'; videoId: string; category: string }
+  | { type: 'KB_TRASH'; videoId: string }
+  | { type: 'KB_RESTORE'; videoId: string }
+  | { type: 'KB_EMPTY_TRASH' }
   // Tab-targeted messages
   | { type: 'GET_ACTIVE_VIDEO_STATE' }
   | { type: 'SEEK_TO'; seconds: number }
