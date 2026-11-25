@@ -16,7 +16,8 @@ import {
 } from '../shared/sponsorblock';
 import { formatTranscriptForPrompt, parseJson3Transcript, parseXmlTranscript } from '../shared/transcript';
 import { extractYouTubeVideoId } from '../shared/youtube-url';
-import type { QueueJob } from '../shared/types';
+import type { ActivityLogEntry, LogLevel, LogScope, QueueJob } from '../shared/types';
+import { appendActivityLog } from '../shared/logs';
 import {
   buildKbQuestionPrompt,
   buildVideoAnalysisPrompt,
@@ -41,9 +42,50 @@ import {
 
 const SETTINGS_STORAGE_KEY = 'chaptermind_settings';
 const BRIDGE_TASK_KEY = 'chaptermind_bridge_task';
+const ACTIVITY_LOGS_KEY = 'chaptermind_activity_logs_v1';
 
 const sponsorCache = new Map<string, { fetchedAt: number; segments: SponsorSegment[] }>();
 let memoryBridgeTasks: Partial<Record<SubscriptionProvider, BridgeTask>> = {};
+let logStorageChain: Promise<void> = Promise.resolve();
+
+async function loadActivityLogs(): Promise<ActivityLogEntry[]> {
+  try {
+    const res = await chrome.storage.local.get(ACTIVITY_LOGS_KEY);
+    return Array.isArray(res[ACTIVITY_LOGS_KEY]) ? (res[ACTIVITY_LOGS_KEY] as ActivityLogEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function addActivityLog(
+  scope: LogScope,
+  level: LogLevel,
+  message: string,
+  videoId?: string
+): void {
+  const run = logStorageChain.then(async () => {
+    const existing = await loadActivityLogs();
+    const next = appendActivityLog(existing, { scope, level, message, videoId }, 120);
+    await chrome.storage.local.set({ [ACTIVITY_LOGS_KEY]: next });
+    chrome.runtime.sendMessage({ type: 'LOGS_UPDATED', logs: next }).catch(() => {});
+  });
+  logStorageChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+}
+
+function clearActivityLogs(): Promise<void> {
+  const run = logStorageChain.then(async () => {
+    await chrome.storage.local.set({ [ACTIVITY_LOGS_KEY]: [] });
+    chrome.runtime.sendMessage({ type: 'LOGS_UPDATED', logs: [] }).catch(() => {});
+  });
+  logStorageChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
 
 chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
 
@@ -276,7 +318,13 @@ async function maybeAutoPushGithub(settings: ExtensionSettings): Promise<void> {
         return;
       }
       const allEntries = await getAllEntries();
-      await pushKnowledgeBaseToGithub(latestSettings, allEntries);
+      addActivityLog('github', 'info', `Auto-pushing KB (${allEntries.filter((e) => !e.trashedAt).length} active)...`);
+      const res = await pushKnowledgeBaseToGithub(latestSettings, allEntries);
+      addActivityLog(
+        'github',
+        'success',
+        `Auto-push done: ${res.pushedFiles} pushed, ${res.skippedFiles} unchanged`
+      );
     });
   } finally {
     autoPushQueued = false;
@@ -388,6 +436,16 @@ async function handleMessage(
       return { ok: true, deletedCount: trashed.length };
     }
 
+    case 'LOGS_GET': {
+      const logs = await loadActivityLogs();
+      return { logs };
+    }
+
+    case 'LOGS_CLEAR': {
+      await clearActivityLogs();
+      return { ok: true, logs: [] };
+    }
+
     case 'KB_IMPORT_BULK': {
       for (const entry of msg.entries) {
         if (entry?.videoId) {
@@ -398,6 +456,7 @@ async function handleMessage(
     }
 
     case 'ANALYZE_VIDEO_API': {
+      const startedAt = Date.now();
       const settings = await loadSettings();
       const stripped = settings.stripSponsorsFromAi
         ? stripSponsorSegmentsFromTranscript(msg.transcript, msg.sponsorSegments)
@@ -405,6 +464,7 @@ async function handleMessage(
 
       const formatted = formatTranscriptForPrompt(stripped.cleanedCues);
       if (!formatted.text) {
+        addActivityLog('ai', 'error', 'Transcript empty — aborted analyze', msg.meta.videoId);
         throw new Error('Transcript is empty — cannot analyze video.');
       }
 
@@ -413,25 +473,46 @@ async function handleMessage(
         topicsCare: settings.topicsCare,
         topicsIgnore: settings.topicsIgnore,
       });
-      const rawReply = await callAiProvider(settings, prompt, settings.apiProvider === 'gemini');
-
-      const entry = buildKnowledgeEntryFromAnalysis(
-        msg.meta,
-        stripped.cleanedCues,
-        sbCount,
-        stripped.removedDurationSec,
-        rawReply,
-        `${settings.apiProvider}:${settings.apiModel || 'default'}`
+      const providerLabel = `${settings.apiProvider}:${settings.apiModel || 'default'}`;
+      addActivityLog(
+        'ai',
+        'info',
+        `Analyze via ${providerLabel} (${stripped.cleanedCues.length} cues, ${prompt.length} chars)`,
+        msg.meta.videoId
       );
-      if (!settings.aiFallbackSponsorDetection) {
-        entry.aiSponsors = [];
-      }
+      try {
+        const rawReply = await callAiProvider(settings, prompt, settings.apiProvider === 'gemini');
 
-      await putEntry(entry);
-      await pushAnalysisToYouTubeTabs(entry);
-      chrome.runtime.sendMessage({ type: 'ANALYSIS_COMPLETED', entry }).catch(() => {});
-      void maybeAutoPushGithub(settings).catch(() => {});
-      return { ok: true, entry };
+        const entry = buildKnowledgeEntryFromAnalysis(
+          msg.meta,
+          stripped.cleanedCues,
+          sbCount,
+          stripped.removedDurationSec,
+          rawReply,
+          providerLabel
+        );
+        if (!settings.aiFallbackSponsorDetection) {
+          entry.aiSponsors = [];
+        }
+
+        await putEntry(entry);
+        await pushAnalysisToYouTubeTabs(entry);
+        chrome.runtime.sendMessage({ type: 'ANALYSIS_COMPLETED', entry }).catch(() => {});
+        const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+        addActivityLog(
+          'ai',
+          'success',
+          `Saved ${entry.chapters.length} ch, ${entry.entities.length} ent in ${elapsedSec}s`,
+          msg.meta.videoId
+        );
+        void maybeAutoPushGithub(settings).catch((err) => {
+          addActivityLog('github', 'warn', err instanceof Error ? err.message : String(err));
+        });
+        return { ok: true, entry };
+      } catch (err) {
+        addActivityLog('ai', 'error', err instanceof Error ? err.message : String(err), msg.meta.videoId);
+        throw err;
+      }
     }
 
     case 'PARSE_MANUAL_ANALYSIS': {
@@ -613,7 +694,19 @@ async function handleMessage(
       const result = await enqueueGithubTask(async () => {
         const settings = await loadSettings();
         const entries = await getAllEntries();
-        return await pushKnowledgeBaseToGithub(settings, entries);
+        addActivityLog('github', 'info', 'Manual Push All started...');
+        try {
+          const res = await pushKnowledgeBaseToGithub(settings, entries);
+          addActivityLog(
+            'github',
+            'success',
+            `Manual Push done: ${res.pushedFiles} pushed, ${res.skippedFiles} skipped`
+          );
+          return res;
+        } catch (err) {
+          addActivityLog('github', 'error', err instanceof Error ? err.message : String(err));
+          throw err;
+        }
       });
       return { ok: true, ...result };
     }
@@ -621,24 +714,35 @@ async function handleMessage(
     case 'GITHUB_FETCH_ALL': {
       const settings = await loadSettings();
       const localEntries = await getAllEntries();
-      const result = await fetchKnowledgeBaseFromGithub(settings, localEntries);
-      for (const entry of result.entriesToSave) {
-        await putEntry(entry);
-      }
-      if (result.remoteInterests) {
-        const mergedIgnore = Array.from(
-          new Set([...settings.topicsIgnore, ...(result.remoteInterests.topicsIgnore ?? [])])
+      addActivityLog('github', 'info', 'Fetching KB updates from GitHub...');
+      try {
+        const result = await fetchKnowledgeBaseFromGithub(settings, localEntries);
+        for (const entry of result.entriesToSave) {
+          await putEntry(entry);
+        }
+        if (result.remoteInterests) {
+          const mergedIgnore = Array.from(
+            new Set([...settings.topicsIgnore, ...(result.remoteInterests.topicsIgnore ?? [])])
+          );
+          const mergedCare = Array.from(
+            new Set([...settings.topicsCare, ...(result.remoteInterests.topicsCare ?? [])])
+          );
+          await saveSettings({ topicsIgnore: mergedIgnore, topicsCare: mergedCare });
+        }
+        addActivityLog(
+          'github',
+          'success',
+          `Fetched ${result.fetchedCount} new/updated (${result.totalRemote} remote)`
         );
-        const mergedCare = Array.from(
-          new Set([...settings.topicsCare, ...(result.remoteInterests.topicsCare ?? [])])
-        );
-        await saveSettings({ topicsIgnore: mergedIgnore, topicsCare: mergedCare });
+        return {
+          ok: true,
+          fetchedCount: result.fetchedCount,
+          totalRemote: result.totalRemote,
+        };
+      } catch (err) {
+        addActivityLog('github', 'error', err instanceof Error ? err.message : String(err));
+        throw err;
       }
-      return {
-        ok: true,
-        fetchedCount: result.fetchedCount,
-        totalRemote: result.totalRemote,
-      };
     }
 
     case 'OPEN_SIDEPANEL': {
@@ -718,6 +822,7 @@ async function handleMessage(
       }
       inFlightQueueVideoIds.delete(msg.videoId);
       syncQueueKeepalive();
+      addActivityLog('queue', 'warn', 'Cancelled / removed from queue', msg.videoId);
       const { next: jobs } = await mutateQueueJobs((curr) => ({
         next: curr.filter((j) => j.videoId !== msg.videoId),
         changed: true,
@@ -1004,6 +1109,7 @@ async function recoverStaleQueueJobs(): Promise<QueueJob[]> {
       const staleTimeout = now - (job.updatedAt || job.addedAt) > 90_000;
       if (notRunningInWorker || staleTimeout) {
         changed = true;
+        addActivityLog('queue', 'warn', 'Recovered stale job -> queued', job.videoId);
         return { ...job, status: 'queued' as const, error: undefined, updatedAt: now };
       }
       return job;
@@ -1097,6 +1203,12 @@ async function enqueueHeadlessBatch(
   });
 
   if ((addedOrActive?.length ?? 0) > 0) {
+    addActivityLog(
+      'queue',
+      'info',
+      `Queued ${addedOrActive!.length} video(s)`,
+      addedOrActive!.length === 1 ? addedOrActive![0]?.videoId : undefined
+    );
     void processHeadlessQueue();
   }
   return addedOrActive ?? [];
@@ -1112,13 +1224,28 @@ async function enqueueHeadlessJob(
 }
 
 async function runSingleHeadlessJob(videoId: string): Promise<void> {
+  const startedAt = Date.now();
   try {
     await updateQueueJob(videoId, { status: 'fetching_transcript', error: undefined });
     const settings = await loadSettings();
 
-    let capture =
-      (await tryCaptureFromExistingYouTubeTab(videoId)) ??
-      (await fetchWatchPageDataHeadless(videoId));
+    const fromOpenTab = await tryCaptureFromExistingYouTubeTab(videoId);
+    let capture = fromOpenTab ?? (await fetchWatchPageDataHeadless(videoId));
+    if (fromOpenTab) {
+      addActivityLog(
+        'transcript',
+        'info',
+        `Captured ${fromOpenTab.transcript.length} cues from open tab`,
+        videoId
+      );
+    } else if (capture.transcript.length > 0) {
+      addActivityLog(
+        'transcript',
+        'info',
+        `Watch-HTML fast path extracted ${capture.transcript.length} cues`,
+        videoId
+      );
+    }
     if (capture.meta?.title) {
       await updateQueueJob(videoId, {
         title: capture.meta.title,
@@ -1127,6 +1254,7 @@ async function runSingleHeadlessJob(videoId: string): Promise<void> {
     }
 
     if (!capture.meta || capture.transcript.length === 0) {
+      addActivityLog('transcript', 'info', 'Opening silent &cm_headless=1 tab...', videoId);
       const tabCapture = await captureViaHeadlessTab(videoId);
       capture = {
         meta: tabCapture.meta ?? capture.meta,
@@ -1138,6 +1266,14 @@ async function runSingleHeadlessJob(videoId: string): Promise<void> {
             : capture.youtubeChapters,
         error: tabCapture.error ?? capture.error,
       };
+      if (capture.transcript.length > 0) {
+        addActivityLog(
+          'transcript',
+          'info',
+          `Headless tab captured ${capture.transcript.length} cues`,
+          videoId
+        );
+      }
     }
 
     if (!capture.meta || capture.transcript.length === 0) {
@@ -1166,6 +1302,13 @@ async function runSingleHeadlessJob(videoId: string): Promise<void> {
       }
     );
 
+    const providerLabel = `${settings.apiProvider}:${settings.apiModel || 'default'}`;
+    addActivityLog(
+      'ai',
+      'info',
+      `Analyzing via ${providerLabel} (${stripped.cleanedCues.length} cues, ${prompt.length} chars)`,
+      videoId
+    );
     const rawResponse = await callAiProvider(settings, prompt, true);
     const entry = buildKnowledgeEntryFromAnalysis(
       capture.meta,
@@ -1173,12 +1316,20 @@ async function runSingleHeadlessJob(videoId: string): Promise<void> {
       sponsorSegments.filter((s) => s.category !== 'chapter').length,
       stripped.removedDurationSec,
       rawResponse,
-      `${settings.apiProvider}:${settings.apiModel || 'default'}`
+      providerLabel
     );
 
     await putEntry(entry);
     await pushAnalysisToYouTubeTabs(entry);
     chrome.runtime.sendMessage({ type: 'ANALYSIS_COMPLETED', entry }).catch(() => {});
+
+    const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+    addActivityLog(
+      'queue',
+      'success',
+      `Completed ${entry.chapters.length} ch, ${entry.entities.length} ent in ${elapsedSec}s`,
+      videoId
+    );
 
     await updateQueueJob(videoId, {
       status: 'done',
@@ -1191,9 +1342,11 @@ async function runSingleHeadlessJob(videoId: string): Promise<void> {
 
     void maybeAutoPushGithub(settings).catch((err) => {
       console.warn('ChapterMind auto-push skipped:', err);
+      addActivityLog('github', 'warn', err instanceof Error ? err.message : String(err), videoId);
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    addActivityLog('queue', 'error', message, videoId);
     await updateQueueJob(videoId, { status: 'error', error: message });
   }
 }

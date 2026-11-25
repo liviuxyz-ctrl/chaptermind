@@ -1274,3 +1274,58 @@ textarea:focus,
   padding: 2px 6px;
   font-size: 11px;
 }
+
+.logs-list {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.log-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  word-break: break-word;
+}
+
+.log-time {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.log-scope {
+  font-weight: 600;
+  color: #7dd3fc;
+  flex-shrink: 0;
+}
+
+.log-row.is-success .log-scope {
+  color: #34d399;
+}
+
+.log-row.is-warn .log-scope {
+  color: #fbbf24;
+}
+
+.log-row.is-error {
+  border-color: rgba(244, 63, 94, 0.4);
+}
+
+.log-row.is-error .log-scope {
+  color: #fda4af;
+}
+
+.log-msg {
+  flex: 1;
+  min-width: 0;
+}

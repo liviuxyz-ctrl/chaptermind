@@ -321,6 +321,8 @@ export type RuntimeMessage =
   | { type: 'KB_TRASH'; videoId: string }
   | { type: 'KB_RESTORE'; videoId: string }
   | { type: 'KB_EMPTY_TRASH' }
+  | { type: 'LOGS_GET' }
+  | { type: 'LOGS_CLEAR' }
   // Tab-targeted messages
   | { type: 'GET_ACTIVE_VIDEO_STATE' }
   | { type: 'SEEK_TO'; seconds: number }
@@ -333,7 +335,20 @@ export type RuntimeMessage =
   | { type: 'ANALYSIS_COMPLETED'; entry: KnowledgeEntry }
   | { type: 'BRIDGE_KB_ANSWER_READY'; question: string; answer: string; entries: KnowledgeEntry[] }
   | { type: 'BRIDGE_ANALYSIS_READY'; entry: KnowledgeEntry }
-  | { type: 'QUEUE_UPDATED'; jobs: QueueJob[]; kbVideoIds?: string[] };
+  | { type: 'QUEUE_UPDATED'; jobs: QueueJob[]; kbVideoIds?: string[] }
+  | { type: 'LOGS_UPDATED'; logs: ActivityLogEntry[] };
+
+export type LogLevel = 'info' | 'warn' | 'error' | 'success';
+export type LogScope = 'queue' | 'transcript' | 'ai' | 'github' | 'system';
+
+export interface ActivityLogEntry {
+  id: string;
+  ts: number;
+  level: LogLevel;
+  scope: LogScope;
+  message: string;
+  videoId?: string;
+}
 
 export type QueueJobStatus =
   | 'queued'

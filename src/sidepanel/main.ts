@@ -30,7 +30,8 @@ import {
   getTrashedEntries,
   searchKnowledgeBase,
 } from '../shared/kb-storage';
-import type { QueueJob } from '../shared/types';
+import type { ActivityLogEntry, QueueJob } from '../shared/types';
+import { formatActivityLogsText, formatLogTimestamp } from '../shared/logs';
 import {
   addUniqueTopic,
   evaluateChapterRelevance,
@@ -1900,6 +1901,25 @@ function bindEvents() {
     });
   });
 
+  document.getElementById('logs-copy-btn')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (activityLogs.length === 0) {
+      showBanner('No activity logs to copy yet.', 'info');
+      return;
+    }
+    await navigator.clipboard.writeText(formatActivityLogsText(activityLogs));
+    showBanner(`Copied ${activityLogs.length} log entries to clipboard!`, 'success');
+  });
+
+  document.getElementById('logs-clear-btn')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await sendMessage({ type: 'LOGS_CLEAR' });
+    activityLogs = [];
+    renderLogsDrawer();
+  });
+
   document.getElementById('queue-open-tabs-btn')?.addEventListener('click', async () => {
     try {
       const res = await sendMessage<{
@@ -2109,6 +2129,9 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
     if (queueJobs.some((j) => j.status === 'done')) {
       void loadKb();
     }
+  } else if (msg.type === 'LOGS_UPDATED') {
+    activityLogs = msg.logs;
+    renderLogsDrawer();
   }
 });
 
@@ -2301,6 +2324,55 @@ async function loadQueue() {
   }
 }
 
+let activityLogs: ActivityLogEntry[] = [];
+
+function renderLogsDrawer() {
+  const badge = document.getElementById('logs-count-badge');
+  const list = document.getElementById('logs-list');
+  if (!badge || !list) return;
+
+  badge.textContent = String(activityLogs.length);
+  list.innerHTML = '';
+
+  if (activityLogs.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'muted-small';
+    p.textContent = 'No activity yet. Analyze or queue a video to see timing and debug logs.';
+    list.appendChild(p);
+    return;
+  }
+
+  for (const entry of activityLogs) {
+    const row = document.createElement('div');
+    row.className = `log-row is-${entry.level}`;
+
+    const timeEl = document.createElement('span');
+    timeEl.className = 'log-time';
+    timeEl.textContent = formatLogTimestamp(entry.ts);
+
+    const scopeEl = document.createElement('span');
+    scopeEl.className = 'log-scope';
+    scopeEl.textContent = `[${entry.scope}]`;
+
+    const msgEl = document.createElement('span');
+    msgEl.className = 'log-msg';
+    msgEl.textContent = entry.videoId ? `${entry.message} (${entry.videoId})` : entry.message;
+
+    row.append(timeEl, scopeEl, msgEl);
+    list.appendChild(row);
+  }
+}
+
+async function loadLogs() {
+  try {
+    const res = await sendMessage<{ logs?: ActivityLogEntry[] }>({ type: 'LOGS_GET' });
+    activityLogs = res.logs ?? [];
+    renderLogsDrawer();
+  } catch {
+    // ignore
+  }
+}
+
 chrome.tabs.onActivated.addListener(() => void syncActiveYouTubeTab());
 chrome.windows?.onFocusChanged?.addListener(() => void syncActiveYouTubeTab());
 chrome.tabs.onCreated?.addListener(() => void refreshOpenYouTubeTabs());
@@ -2322,7 +2394,7 @@ async function init() {
   const res = await sendMessage<{ settings: ExtensionSettings }>({ type: 'SETTINGS_GET' });
   settings = res.settings;
   renderSettingsTab();
-  await Promise.all([syncActiveYouTubeTab(), loadKb(), loadQueue()]);
+  await Promise.all([syncActiveYouTubeTab(), loadKb(), loadQueue(), loadLogs()]);
   await refreshOpenYouTubeTabs();
 }
 
