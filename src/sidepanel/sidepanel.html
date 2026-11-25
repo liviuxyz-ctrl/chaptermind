@@ -508,6 +508,30 @@
             <div id="category-rules-grid" class="rules-grid"></div>
           </div>
         </details>
+
+        <details class="accordion" open>
+          <summary class="accordion-summary">
+            <span class="chevron">▸</span>
+            <span>Settings Backup (JSON Export / Import)</span>
+          </summary>
+          <div class="accordion-body stack-sm">
+            <p class="muted" style="margin: 0; font-size: 11px;">
+              Export non-sensitive preferences safely, or export API keys &amp; GitHub token separately.
+            </p>
+            <div class="row-end" style="flex-wrap: wrap; gap: 6px;">
+              <button id="export-settings-safe-btn" type="button" class="btn btn-ghost btn-sm">
+                Export Non-Sensitive JSON
+              </button>
+              <button id="export-settings-secrets-btn" type="button" class="btn btn-ghost btn-sm">
+                Export Sensitive JSON
+              </button>
+              <label class="btn btn-primary btn-sm file-label" title="Import settings or secrets JSON">
+                Import Settings JSON
+                <input id="import-settings-json-input" type="file" accept="application/json" hidden />
+              </label>
+            </div>
+          </div>
+        </details>
       </section>
     </div>
 

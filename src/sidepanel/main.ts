@@ -41,6 +41,11 @@ import {
   toggleChapterIgnore,
 } from '../shared/interests';
 import { parseGithubRepo } from '../shared/github-sync';
+import {
+  exportNonSensitiveSettings,
+  exportSensitiveSettings,
+  parseImportedSettingsJson,
+} from '../shared/settings-export';
 import { extractAllYouTubeVideoIds, extractYouTubeVideoId } from '../shared/youtube-url';
 
 let activeTabId: number | null = null;
@@ -1890,6 +1895,47 @@ function bindEvents() {
     });
     settings = res.settings;
     showBanner('Settings saved!', 'success');
+  });
+
+  document.getElementById('export-settings-safe-btn')?.addEventListener('click', () => {
+    const payload = exportNonSensitiveSettings(settings);
+    downloadTextFile(
+      'chaptermind-settings.json',
+      JSON.stringify(payload, null, 2),
+      'application/json'
+    );
+    showBanner('Exported non-sensitive settings JSON.', 'success');
+  });
+
+  document.getElementById('export-settings-secrets-btn')?.addEventListener('click', () => {
+    const payload = exportSensitiveSettings(settings);
+    downloadTextFile(
+      'chaptermind-secrets.json',
+      JSON.stringify(payload, null, 2),
+      'application/json'
+    );
+    showBanner('Exported sensitive credentials JSON. Keep this file private.', 'info');
+  });
+
+  document.getElementById('import-settings-json-input')?.addEventListener('change', async (e) => {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const partial = parseImportedSettingsJson(text);
+      const res = await sendMessage<{ settings: ExtensionSettings }>({
+        type: 'SETTINGS_SAVE',
+        settings: partial,
+      });
+      settings = res.settings;
+      renderSettingsTab();
+      showBanner(`Imported ${Object.keys(partial).length} setting(s)!`, 'success');
+    } catch (err) {
+      showBanner(err instanceof Error ? err.message : 'Settings JSON import failed', 'error');
+    } finally {
+      input.value = '';
+    }
   });
 
   document.getElementById('queue-clear-done-btn')?.addEventListener('click', (e) => {
