@@ -172,3 +172,40 @@ export function formatTranscriptForPrompt(
     truncated: true,
   };
 }
+
+/**
+ * Computes a lightweight deterministic fingerprint from a transcript's length and edge cues
+ * so stale YouTube transcript DOM from a previous SPA video is never reused for the next video.
+ */
+export function computeTranscriptFingerprint(cues: TranscriptCue[]): string {
+  if (!Array.isArray(cues) || cues.length === 0) return '';
+  const sampleIndices = [0, 1, 2, cues.length - 1];
+  const seenIdx = new Set<number>();
+  const parts: string[] = [String(cues.length)];
+  for (const rawIdx of sampleIndices) {
+    const idx = Math.max(0, Math.min(cues.length - 1, rawIdx));
+    if (seenIdx.has(idx)) continue;
+    seenIdx.add(idx);
+    const cue = cues[idx];
+    if (!cue) continue;
+    const normText = cue.text.replace(/\s+/g, ' ').trim().slice(0, 48).toLowerCase();
+    parts.push(`${Math.round(cue.startSec)}:${normText}`);
+  }
+  return parts.join('|');
+}
+
+/**
+ * Returns true if the transcript fingerprint is empty, matches a known-stale DOM snapshot,
+ * or belongs to a previously extracted different videoId.
+ */
+export function isTranscriptFingerprintFromOtherVideo(
+  fingerprint: string,
+  targetVideoId: string,
+  seenFingerprints: ReadonlyMap<string, string>,
+  staleDomFingerprint?: string
+): boolean {
+  if (!fingerprint) return true;
+  if (staleDomFingerprint && fingerprint === staleDomFingerprint) return true;
+  const owner = seenFingerprints.get(fingerprint);
+  return Boolean(owner && owner !== targetVideoId);
+}

@@ -10,17 +10,27 @@
     <div id="app">
       <header class="topbar">
         <div class="brand">
-          <span class="brand-dot"></span>
+          <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <rect width="24" height="24" rx="6" fill="#18181b" stroke="rgba(255,255,255,0.12)" />
+            <polygon points="9,6 17,11 9,16" fill="#10b981" />
+            <rect x="5" y="18" width="5" height="2.2" rx="1" fill="#38bdf8" />
+            <rect x="11" y="18" width="4" height="2.2" rx="1" fill="#10b981" />
+            <rect x="16" y="18" width="3" height="2.2" rx="1" fill="#f97316" />
+          </svg>
           <span class="brand-name">ChapterMind</span>
-          <span class="brand-tag">SB + AI KB</span>
         </div>
-        <button id="refresh-btn" class="icon-btn" title="Refresh active video">↻</button>
+        <button id="refresh-btn" class="icon-btn" title="Refresh active video">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+            <polyline points="21 3 21 9 15 9" />
+          </svg>
+        </button>
       </header>
 
       <nav class="tabs" role="tablist">
-        <button class="tab active" data-tab="watching">Now Watching</button>
+        <button class="tab active" data-tab="watching">Now</button>
         <button class="tab" data-tab="transcript">Transcript</button>
-        <button class="tab" data-tab="kb">Knowledge Base</button>
+        <button class="tab" data-tab="kb">Library</button>
         <button class="tab" data-tab="settings">Settings</button>
       </nav>
 
@@ -28,204 +38,264 @@
 
       <!-- TAB 1: NOW WATCHING -->
       <section id="tab-watching" class="panel active">
-        <div id="no-video-card" class="card muted-card hidden">
+        <div id="open-tabs-bar" class="open-tabs-bar hidden">
+          <div id="open-tabs-list" class="open-tabs-list" aria-label="Open YouTube video tabs"></div>
+          <button id="queue-open-tabs-btn" class="btn btn-xs btn-ghost shrink-0" type="button" title="Queue all unsaved open YouTube tabs headlessly">
+            Queue All
+          </button>
+        </div>
+
+        <div id="no-video-card" class="empty-state hidden">
           <p class="empty-title">Open any YouTube video</p>
           <p class="empty-sub">
-            ChapterMind will automatically load SponsorBlock segments, transcript cues, and visual chapters.
+            SponsorBlock segments, transcripts, and chapters load automatically.
           </p>
         </div>
 
-        <div id="video-workspace" class="stack hidden">
-          <div class="card video-card">
-            <div class="video-title" id="video-title">Loading...</div>
+        <div id="video-workspace" class="workspace hidden">
+          <!-- Compact Video + Scrubber + 1-Row AI Dock -->
+          <div class="video-dock">
+            <div class="video-title-row">
+              <div class="video-title" id="video-title">Loading...</div>
+              <span id="kb-saved-badge" class="badge-dot hidden" title="Saved in Library">KB</span>
+            </div>
             <div class="video-meta">
               <span id="video-channel">Channel</span>
-              <span id="video-duration">0:00</span>
-              <span id="video-transcript-badge" class="pill pill-neutral">Transcript...</span>
-              <span id="video-sb-badge" class="pill pill-green hidden">SB</span>
+              <span class="meta-sep">·</span>
+              <span id="video-duration" class="mono">0:00</span>
+              <span id="video-transcript-badge" class="meta-pill">...</span>
+              <span id="video-sb-badge" class="meta-pill meta-green hidden">SB</span>
             </div>
 
-            <div class="timeline-wrap">
-              <div class="timeline-labels">
-                <span id="timeline-current">0:00</span>
-                <span class="timeline-hint">Click timeline to seek</span>
-                <span id="timeline-total">0:00</span>
-              </div>
-              <div id="visual-timeline" class="visual-timeline"></div>
+            <div class="scrubber-row">
+              <span id="timeline-current" class="mono time-label">0:00</span>
+              <div id="visual-timeline" class="visual-timeline" title="Click timeline to seek"></div>
+              <span id="timeline-total" class="mono time-label">0:00</span>
             </div>
-          </div>
 
-          <div class="card ai-card">
-            <div class="section-head">
-              <span class="section-title">AI Chapters &amp; Knowledge Extraction</span>
-              <span id="kb-saved-badge" class="pill pill-cyan hidden">Saved in KB</span>
-            </div>
-            <div class="ai-actions">
-              <button id="analyze-api-btn" class="btn btn-primary">✨ Analyze via API</button>
-              <button id="toggle-manual-paste-btn" class="btn btn-ghost">Paste Reply</button>
-            </div>
-            <div class="sub-bridge-row">
-              <span class="sub-label">Or use your AI subscription:</span>
-              <div class="sub-btns">
-                <button class="btn btn-sub" data-bridge-provider="gemini">Gemini</button>
-                <button class="btn btn-sub" data-bridge-provider="chatgpt">ChatGPT</button>
-                <button class="btn btn-sub" data-bridge-provider="claude">Claude</button>
+            <div class="ai-bar">
+              <button id="analyze-api-btn" class="btn btn-primary btn-sm">Analyze</button>
+              <div class="seg-group" aria-label="Analyze with subscription">
+                <button class="seg-btn" data-bridge-provider="claude" title="Send to Claude web subscription">Claude</button>
+                <button class="seg-btn" data-bridge-provider="chatgpt" title="Send to ChatGPT web subscription">ChatGPT</button>
+                <button class="seg-btn" data-bridge-provider="gemini" title="Send to Gemini web subscription">Gemini</button>
               </div>
+              <button id="toggle-manual-paste-btn" class="btn btn-ghost btn-sm" title="Paste JSON reply">Paste</button>
             </div>
+
             <div id="manual-paste-box" class="manual-paste hidden">
               <textarea
                 id="manual-paste-input"
-                rows="4"
-                placeholder="Paste the JSON / response from Gemini, ChatGPT, or Claude here..."
+                rows="3"
+                placeholder="Paste JSON reply from Claude, ChatGPT, or Gemini..."
               ></textarea>
               <div class="row-end">
-                <button id="copy-prompt-only-btn" class="btn btn-ghost">Copy Prompt</button>
-                <button id="import-manual-btn" class="btn btn-primary">Import into KB</button>
+                <button id="copy-prompt-only-btn" class="btn btn-ghost btn-xs">Copy Prompt</button>
+                <button id="import-manual-btn" class="btn btn-primary btn-xs">Import</button>
               </div>
             </div>
-            <div id="video-tldr" class="tldr hidden"></div>
           </div>
 
-          <div class="card interest-card">
-            <div class="section-head">
-              <span class="section-title">Don't Care / Auto-Skip Filter</span>
-              <div class="inline-checks">
-                <label class="toggle-inline">
+          <!-- Collapsible AI Summary -->
+          <div id="tldr-wrap" class="tldr-wrap hidden">
+            <div id="video-tldr" class="tldr clamped"></div>
+            <button id="tldr-toggle-btn" type="button" class="link-btn">More</button>
+          </div>
+
+          <!-- Compact 1-Row Don't Care Auto-Skip Drawer -->
+          <details id="interest-drawer" class="drawer">
+            <summary class="drawer-summary">
+              <span class="drawer-left">
+                <span class="chevron">▸</span>
+                <span>Auto-Skip Filter</span>
+                <span id="interest-count-label" class="muted-tag">5</span>
+              </span>
+              <span class="drawer-controls">
+                <label class="switch-inline" title="Automatically skip Don't Care chapters">
                   <input type="checkbox" id="quick-autoskip-toggle" checked />
-                  <span>Auto-skip</span>
+                  <span>Skip</span>
                 </label>
-                <label class="toggle-inline">
+                <label class="switch-inline" title="Hide ignored chapters from list">
                   <input type="checkbox" id="hide-skipped-toggle" />
                   <span>Hide</span>
                 </label>
+              </span>
+            </summary>
+            <div class="drawer-body">
+              <div class="inline-add">
+                <input
+                  id="quick-ignore-input"
+                  class="input input-sm"
+                  type="text"
+                  placeholder="Ignore topic (e.g. image models, small models)..."
+                />
+                <button id="quick-ignore-add-btn" class="btn btn-xs">Ignore</button>
               </div>
+              <div id="quick-ignore-chips" class="chip-group"></div>
             </div>
-            <div class="inline-add">
-              <input
-                id="quick-ignore-input"
-                class="input input-sm"
-                type="text"
-                placeholder="Ignore topic (e.g. image models, small models, Tesla)..."
-              />
-              <button id="quick-ignore-add-btn" class="btn btn-xs">Ignore</button>
-            </div>
-            <div id="quick-ignore-chips" class="chip-group"></div>
-          </div>
+          </details>
 
-          <div class="card">
-            <div class="section-head">
-              <span class="section-title">Visual Chapters</span>
-              <div class="chapter-nav-btns">
-                <button id="prev-ch-btn" class="btn btn-xs" title="Previous Chapter ([)">◀</button>
-                <button id="next-ch-btn" class="btn btn-xs" title="Next Chapter (])">▶</button>
-              </div>
-            </div>
-
-            <div class="filter-row">
-              <div class="chip-group" id="chapter-mode-chips">
-                <button class="chip active" data-mode="best">Best</button>
-                <button class="chip" data-mode="ai">AI</button>
-                <button class="chip" data-mode="youtube">YouTube</button>
-                <button class="chip" data-mode="sponsorblock">SB</button>
+          <!-- Main Stage: Visual Chapters -->
+          <div class="chapters-stage">
+            <div class="chapters-toolbar">
+              <div class="seg-group" id="chapter-mode-chips">
+                <button class="seg-btn active" data-mode="best">Best</button>
+                <button class="seg-btn" data-mode="ai">AI</button>
+                <button class="seg-btn" data-mode="youtube">YT</button>
+                <button class="seg-btn" data-mode="sponsorblock">SB</button>
               </div>
               <input
                 id="chapter-search"
-                class="input input-sm"
+                class="input input-sm search-flex"
                 type="search"
                 placeholder="Filter chapters..."
               />
+              <div class="nav-arrows">
+                <button id="prev-ch-btn" class="btn btn-icon" title="Previous Chapter ([)">◀</button>
+                <button id="next-ch-btn" class="btn btn-icon" title="Next Chapter (])">▶</button>
+              </div>
             </div>
 
-            <div id="chapters-list" class="list"></div>
+            <div id="chapters-list" class="flat-list"></div>
           </div>
 
-          <div class="card">
-            <div class="section-head">
-              <span class="section-title">SponsorBlock &amp; Skip Segments</span>
+          <!-- Collapsible SponsorBlock Segments -->
+          <details id="sb-drawer" class="drawer">
+            <summary class="drawer-summary">
+              <span class="drawer-left">
+                <span class="chevron">▸</span>
+                <span>SponsorBlock Segments</span>
+              </span>
               <span id="sb-summary-text" class="muted-small">0 segments</span>
+            </summary>
+            <div class="drawer-body">
+              <div id="segments-list" class="flat-list"></div>
             </div>
-            <div id="segments-list" class="list"></div>
-          </div>
+          </details>
         </div>
       </section>
 
       <!-- TAB 2: TRANSCRIPT -->
       <section id="tab-transcript" class="panel">
-        <div class="card">
+        <div class="toolbar-sticky">
           <div class="section-head">
             <label class="toggle-inline">
               <input type="checkbox" id="hide-sponsors-toggle" checked />
-              <span>Hide SponsorBlock segments</span>
+              <span>Hide sponsors</span>
             </label>
             <button id="copy-transcript-btn" class="btn btn-xs">Copy Clean</button>
           </div>
           <input
             id="transcript-search"
-            class="input"
+            class="input input-sm"
             type="search"
-            placeholder="Search transcript cues..."
+            placeholder="Search transcript..."
           />
           <div id="transcript-status" class="muted-small"></div>
-          <div id="transcript-list" class="transcript-list"></div>
         </div>
+        <div id="transcript-list" class="transcript-list"></div>
       </section>
 
-      <!-- TAB 3: KNOWLEDGE BASE -->
+      <!-- TAB 3: LIBRARY (KNOWLEDGE BASE) -->
       <section id="tab-kb" class="panel">
-        <div class="stats-grid">
-          <div class="stat-box">
-            <div class="stat-num" id="stat-videos">0</div>
-            <div class="stat-label">Videos</div>
+        <div class="lib-header">
+          <div class="lib-stats">
+            <span><strong id="stat-videos">0</strong> videos</span>
+            <span class="meta-sep">·</span>
+            <span><strong id="stat-entities">0</strong> entities</span>
+            <span class="meta-sep">·</span>
+            <span><strong id="stat-saved-time">0m</strong> saved</span>
           </div>
-          <div class="stat-box">
-            <div class="stat-num" id="stat-entities">0</div>
-            <div class="stat-label">Entities</div>
-          </div>
-          <div class="stat-box">
-            <div class="stat-num" id="stat-saved-time">0m</div>
-            <div class="stat-label">Ads Stripped</div>
+          <div class="export-btns">
+            <button id="git-push-btn" class="btn btn-xs" title="Push Knowledge Base to GitHub">↑ Push</button>
+            <button id="git-fetch-btn" class="btn btn-xs" title="Fetch Knowledge Base from GitHub">↓ Fetch</button>
+            <button id="git-open-btn" class="btn btn-xs" title="Open GitHub Knowledge Base repo">Git ↗</button>
+            <button id="export-all-md-btn" class="btn btn-xs" title="Export Markdown">.md</button>
+            <button id="export-all-json-btn" class="btn btn-xs" title="Export JSON">JSON</button>
+            <label class="btn btn-xs file-label" title="Import JSON">
+              Import
+              <input id="import-json-input" type="file" accept="application/json" hidden />
+            </label>
           </div>
         </div>
 
-        <div class="card">
-          <div class="section-head">
-            <span class="section-title">Ask Your Knowledge Base</span>
-          </div>
-          <textarea
-            id="kb-question-input"
-            rows="2"
-            placeholder="e.g. Which video covered Gemini 5 leaks or MCP routing?"
-          ></textarea>
-          <div class="ask-actions">
-            <button id="ask-kb-api-btn" class="btn btn-primary">Ask via API</button>
-            <button class="btn btn-sub" data-ask-sub="gemini">Ask Gemini</button>
-            <button class="btn btn-sub" data-ask-sub="chatgpt">ChatGPT</button>
-            <button class="btn btn-sub" data-ask-sub="claude">Claude</button>
-          </div>
-          <div id="kb-answer-box" class="answer-box hidden"></div>
-        </div>
-
-        <div class="card">
-          <div class="section-head">
-            <span class="section-title">Saved AI Videos</span>
-            <div class="export-btns">
-              <button id="git-push-btn" class="btn btn-xs" title="Push Knowledge Base to GitHub">↑ Push Git</button>
-              <button id="git-fetch-btn" class="btn btn-xs" title="Fetch Knowledge Base from GitHub">↓ Fetch Git</button>
-              <button id="git-open-btn" class="btn btn-xs" title="Open GitHub Knowledge Base repository">Open Git ↗</button>
-              <button id="export-all-md-btn" class="btn btn-xs">Export .md</button>
-              <button id="export-all-json-btn" class="btn btn-xs">JSON</button>
-              <label class="btn btn-xs file-label">
-                Import
-                <input id="import-json-input" type="file" accept="application/json" hidden />
-              </label>
+        <details id="ask-kb-drawer" class="drawer">
+          <summary class="drawer-summary">
+            <span class="drawer-left">
+              <span class="chevron">▸</span>
+              <span>Ask Your Library</span>
+            </span>
+            <span class="muted-small">AI search across videos</span>
+          </summary>
+          <div class="drawer-body">
+            <textarea
+              id="kb-question-input"
+              rows="2"
+              placeholder="e.g. Which video covered Gemini 5 leaks or MCP routing?"
+            ></textarea>
+            <div class="ask-actions">
+              <button id="ask-kb-api-btn" class="btn btn-primary btn-xs">Ask API</button>
+              <button class="btn btn-ghost btn-xs" data-ask-sub="claude">Claude</button>
+              <button class="btn btn-ghost btn-xs" data-ask-sub="chatgpt">ChatGPT</button>
+              <button class="btn btn-ghost btn-xs" data-ask-sub="gemini">Gemini</button>
             </div>
+            <div id="kb-answer-box" class="answer-box hidden"></div>
           </div>
+        </details>
+
+        <details id="queue-card" class="drawer hidden" open>
+          <summary class="drawer-summary">
+            <span class="drawer-left">
+              <span class="chevron">▸</span>
+              <span>Headless Queue</span>
+            </span>
+            <span class="queue-summary-right">
+              <span id="queue-summary-badge" class="badge-count">0</span>
+              <button id="queue-clear-done-btn" class="btn btn-ghost btn-xs" type="button">Clear done</button>
+            </span>
+          </summary>
+          <div class="drawer-body stack-xs">
+            <div class="queue-add-row">
+              <input
+                id="queue-url-input"
+                class="input input-sm"
+                type="text"
+                placeholder="Paste 1 or more YouTube URLs / IDs..."
+              />
+              <button id="queue-add-btn" class="btn btn-primary btn-xs" type="button">Queue</button>
+            </div>
+            <div id="queue-list" class="queue-list"></div>
+          </div>
+        </details>
+
+        <details id="logs-drawer" class="drawer">
+          <summary class="drawer-summary">
+            <span class="drawer-left">
+              <span class="chevron">▸</span>
+              <span>Activity Logs</span>
+            </span>
+            <span class="queue-summary-right">
+              <span id="logs-count-badge" class="badge-count">0</span>
+              <button id="logs-copy-btn" class="btn btn-ghost btn-xs" type="button">Copy</button>
+              <button id="logs-clear-btn" class="btn btn-ghost btn-xs" type="button">Clear</button>
+            </span>
+          </summary>
+          <div class="drawer-body">
+            <div id="logs-list" class="logs-list"></div>
+          </div>
+        </details>
+
+        <div class="lib-filters">
           <input
             id="kb-search-input"
-            class="input"
+            class="input input-sm"
             type="search"
             placeholder="Search models, repos, topics, or quotes..."
           />
+          <div class="kb-cat-bar">
+            <div class="chip-group" id="kb-category-chips"></div>
+            <button id="kb-trash-tab-btn" class="chip chip-trash" type="button" title="Recycle Bin (kept 30 days)">🗑 Trash (0)</button>
+          </div>
           <div class="chip-group" id="kb-entity-chips">
             <button class="chip active" data-entity="all">All</button>
             <button class="chip" data-entity="model">Models</button>
@@ -234,177 +304,234 @@
             <button class="chip" data-entity="paper">Papers</button>
             <button class="chip" data-entity="concept">Concepts</button>
           </div>
-          <div id="kb-list" class="list"></div>
         </div>
+
+        <div id="kb-trash-banner" class="trash-banner hidden">
+          <span id="kb-trash-info" class="muted-small">Items in Recycle Bin are kept for 30 days.</span>
+          <button id="kb-empty-trash-btn" class="btn btn-ghost btn-xs btn-danger" type="button">Empty Trash</button>
+        </div>
+
+        <div id="kb-list" class="flat-list"></div>
       </section>
 
       <!-- TAB 4: SETTINGS -->
       <section id="tab-settings" class="panel">
-        <div class="card stack-sm">
-          <div class="section-title">AI API Configuration</div>
-          <label class="field">
-            <span>Provider</span>
-            <select id="set-api-provider" class="input">
-              <option value="gemini">Google Gemini API</option>
-              <option value="openai">OpenAI API</option>
-              <option value="anthropic">Anthropic Claude API</option>
-              <option value="custom">Custom / Ollama (OpenAI-compatible)</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>API Key (stored locally)</span>
-            <input
-              id="set-api-key"
-              class="input"
-              type="password"
-              autocomplete="off"
-              placeholder="AIza... / sk-..."
-            />
-          </label>
-          <label class="field">
-            <span>Model</span>
-            <input id="set-api-model" class="input" type="text" placeholder="gemini-2.5-flash" />
-          </label>
-          <label class="field" id="custom-url-field">
-            <span>Custom Base URL</span>
-            <input
-              id="set-custom-url"
-              class="input"
-              type="text"
-              placeholder="http://localhost:11434/v1"
-            />
-          </label>
-          <div class="row-end">
-            <button id="test-api-btn" class="btn btn-ghost">Test API</button>
-            <button id="save-settings-btn" class="btn btn-primary">Save Settings</button>
-          </div>
-        </div>
-
-        <div class="card stack-sm">
-          <div class="section-title">Personal Interest Profile</div>
-          <label class="toggle-row">
-            <input type="checkbox" id="set-autoskip-ignored" />
-            <span>Auto-skip chapters matching "Don't Care" topics</span>
-          </label>
-          <label class="toggle-row">
-            <input type="checkbox" id="set-autoreturn-bridge" />
-            <span>Auto-return to YouTube tab after Capture Reply</span>
-          </label>
-          <div class="field">
-            <span>Topics I Don't Care About (auto-skipped)</span>
-            <div class="inline-add">
+        <details class="accordion" open>
+          <summary class="accordion-summary">
+            <span class="chevron">▸</span>
+            <span>AI API Configuration</span>
+          </summary>
+          <div class="accordion-body stack-sm">
+            <label class="field">
+              <span>Provider</span>
+              <select id="set-api-provider" class="input input-sm">
+                <option value="gemini">Google Gemini API</option>
+                <option value="openai">OpenAI API</option>
+                <option value="anthropic">Anthropic Claude API</option>
+                <option value="custom">Custom / Ollama (OpenAI-compatible)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>API Key (stored locally)</span>
               <input
-                id="set-ignore-input"
+                id="set-api-key"
                 class="input input-sm"
-                type="text"
-                placeholder="e.g. image models, video generation, crypto..."
-              />
-              <button id="set-ignore-add-btn" class="btn btn-xs">Add</button>
-            </div>
-            <div id="set-ignore-chips" class="chip-group"></div>
-          </div>
-          <div class="field">
-            <span>Topics I Care About (highlighted ★)</span>
-            <div class="inline-add">
-              <input
-                id="set-care-input"
-                class="input input-sm"
-                type="text"
-                placeholder="e.g. frontier LLMs, coding agents, reasoning..."
-              />
-              <button id="set-care-add-btn" class="btn btn-xs">Add</button>
-            </div>
-            <div id="set-care-chips" class="chip-group"></div>
-          </div>
-        </div>
-
-        <div class="card stack-sm">
-          <div class="section-title">AI Subscription Bridge</div>
-          <label class="field">
-            <span>Preferred Web Subscription</span>
-            <select id="set-sub-provider" class="input">
-              <option value="gemini">Gemini (gemini.google.com)</option>
-              <option value="chatgpt">ChatGPT (chatgpt.com)</option>
-              <option value="claude">Claude (claude.ai)</option>
-            </select>
-          </label>
-          <label class="toggle-row">
-            <input type="checkbox" id="set-bridge-pill" />
-            <span>Show floating Bridge Pill on Gemini / ChatGPT / Claude</span>
-          </label>
-        </div>
-
-        <div class="card stack-sm">
-          <div class="section-title">GitHub Knowledge Base Sync</div>
-          <label class="field">
-            <span>GitHub Repo (owner/repo)</span>
-            <input
-              id="set-gh-repo"
-              class="input"
-              type="text"
-              placeholder="username/chaptermind-kb"
-            />
-          </label>
-          <label class="field">
-            <span>Branch</span>
-            <input id="set-gh-branch" class="input" type="text" placeholder="main" />
-          </label>
-          <label class="field">
-            <span>Folder inside repo</span>
-            <input id="set-gh-folder" class="input" type="text" placeholder="knowledge-base" />
-          </label>
-          <div class="field">
-            <span>GitHub Token (Fine-grained PAT with Contents Read/Write, stored locally)</span>
-            <div class="inline-add">
-              <input
-                id="set-gh-token"
-                class="input"
                 type="password"
                 autocomplete="off"
-                placeholder="github_pat_... / ghp_..."
+                placeholder="AIza... / sk-..."
               />
-              <button id="toggle-gh-token-btn" type="button" class="btn btn-xs">Show</button>
+            </label>
+            <label class="field">
+              <span>Model</span>
+              <input id="set-api-model" class="input input-sm" type="text" placeholder="gemini-2.5-flash" />
+            </label>
+            <label class="field" id="custom-url-field">
+              <span>Custom Base URL</span>
+              <input
+                id="set-custom-url"
+                class="input input-sm"
+                type="text"
+                placeholder="http://localhost:11434/v1"
+              />
+            </label>
+            <div class="row-end">
+              <button id="test-api-btn" class="btn btn-ghost btn-sm">Test API</button>
+              <button id="save-settings-btn" class="btn btn-primary btn-sm">Save</button>
             </div>
           </div>
-          <label class="toggle-row">
-            <input type="checkbox" id="set-gh-autopush" />
-            <span>Auto-push newly analyzed videos to GitHub</span>
-          </label>
-          <div class="row-end">
-            <button id="open-gh-repo-btn" type="button" class="btn btn-ghost">Open Repo ↗</button>
-            <button id="test-gh-btn" class="btn btn-ghost">Test Git</button>
-            <button id="save-gh-settings-btn" class="btn btn-primary">Save Git Sync</button>
-          </div>
-        </div>
+        </details>
 
-        <div class="card stack-sm">
-          <div class="section-title">SponsorBlock &amp; Player</div>
-          <label class="toggle-row">
-            <input type="checkbox" id="set-sb-enabled" />
-            <span>Enable SponsorBlock auto-skip &amp; timeline bars</span>
-          </label>
-          <label class="toggle-row">
-            <input type="checkbox" id="set-privacy-prefix" />
-            <span>Use SHA-256 privacy hash prefix (k-anonymity)</span>
-          </label>
-          <label class="toggle-row">
-            <input type="checkbox" id="set-strip-ai" />
-            <span>Strip sponsor segments from transcript before AI</span>
-          </label>
-          <label class="toggle-row">
-            <input type="checkbox" id="set-ai-sponsors" />
-            <span>AI fallback sponsor detection (when SponsorBlock has none)</span>
-          </label>
-          <label class="toggle-row">
-            <input type="checkbox" id="set-inpage-hud" />
-            <span>Show visual chapter strip below YouTube player</span>
-          </label>
-          <label class="toggle-row">
-            <input type="checkbox" id="set-shortcuts" />
-            <span>Keyboard shortcuts ([ / ] chapters, Alt+S skip, Alt+C toggle)</span>
-          </label>
-          <div id="category-rules-grid" class="rules-grid"></div>
-        </div>
+        <details class="accordion" open>
+          <summary class="accordion-summary">
+            <span class="chevron">▸</span>
+            <span>GitHub Knowledge Base Sync</span>
+          </summary>
+          <div class="accordion-body stack-sm">
+            <label class="field">
+              <span>GitHub Repo (owner/repo)</span>
+              <input
+                id="set-gh-repo"
+                class="input input-sm"
+                type="text"
+                placeholder="username/chaptermind-kb"
+              />
+            </label>
+            <div class="grid-2">
+              <label class="field">
+                <span>Branch</span>
+                <input id="set-gh-branch" class="input input-sm" type="text" placeholder="main" />
+              </label>
+              <label class="field">
+                <span>Folder</span>
+                <input id="set-gh-folder" class="input input-sm" type="text" placeholder="knowledge-base" />
+              </label>
+            </div>
+            <div class="field">
+              <span>GitHub Token (Fine-grained PAT, Contents Read/Write)</span>
+              <div class="inline-add">
+                <input
+                  id="set-gh-token"
+                  class="input input-sm"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="github_pat_... / ghp_..."
+                />
+                <button id="toggle-gh-token-btn" type="button" class="btn btn-xs">Show</button>
+              </div>
+            </div>
+            <label class="toggle-row">
+              <input type="checkbox" id="set-gh-autopush" />
+              <span>Auto-push newly analyzed videos to GitHub</span>
+            </label>
+            <div class="row-end">
+              <button id="open-gh-repo-btn" type="button" class="btn btn-ghost btn-sm">Open ↗</button>
+              <button id="test-gh-btn" class="btn btn-ghost btn-sm">Test Git</button>
+              <button id="save-gh-settings-btn" class="btn btn-primary btn-sm">Save Git</button>
+            </div>
+          </div>
+        </details>
+
+        <details class="accordion">
+          <summary class="accordion-summary">
+            <span class="chevron">▸</span>
+            <span>Personal Interest Profile</span>
+          </summary>
+          <div class="accordion-body stack-sm">
+            <label class="toggle-row">
+              <input type="checkbox" id="set-autoskip-ignored" />
+              <span>Auto-skip chapters matching "Don't Care" topics</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="set-autoreturn-bridge" />
+              <span>Auto-return to YouTube tab after Capture Reply</span>
+            </label>
+            <div class="field">
+              <span>Topics I Don't Care About (auto-skipped)</span>
+              <div class="inline-add">
+                <input
+                  id="set-ignore-input"
+                  class="input input-sm"
+                  type="text"
+                  placeholder="e.g. image models, video generation, crypto..."
+                />
+                <button id="set-ignore-add-btn" class="btn btn-xs">Add</button>
+              </div>
+              <div id="set-ignore-chips" class="chip-group"></div>
+            </div>
+            <div class="field">
+              <span>Topics I Care About (highlighted ★)</span>
+              <div class="inline-add">
+                <input
+                  id="set-care-input"
+                  class="input input-sm"
+                  type="text"
+                  placeholder="e.g. frontier LLMs, coding agents, reasoning..."
+                />
+                <button id="set-care-add-btn" class="btn btn-xs">Add</button>
+              </div>
+              <div id="set-care-chips" class="chip-group"></div>
+            </div>
+          </div>
+        </details>
+
+        <details class="accordion">
+          <summary class="accordion-summary">
+            <span class="chevron">▸</span>
+            <span>AI Subscription Bridge</span>
+          </summary>
+          <div class="accordion-body stack-sm">
+            <label class="field">
+              <span>Preferred Web Subscription</span>
+              <select id="set-sub-provider" class="input input-sm">
+                <option value="gemini">Gemini (gemini.google.com)</option>
+                <option value="chatgpt">ChatGPT (chatgpt.com)</option>
+                <option value="claude">Claude (claude.ai)</option>
+              </select>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="set-bridge-pill" />
+              <span>Show floating Bridge Pill on Gemini / ChatGPT / Claude</span>
+            </label>
+          </div>
+        </details>
+
+        <details class="accordion">
+          <summary class="accordion-summary">
+            <span class="chevron">▸</span>
+            <span>SponsorBlock &amp; Player Rules</span>
+          </summary>
+          <div class="accordion-body stack-sm">
+            <label class="toggle-row">
+              <input type="checkbox" id="set-sb-enabled" />
+              <span>Enable SponsorBlock auto-skip &amp; timeline bars</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="set-privacy-prefix" />
+              <span>Use SHA-256 privacy hash prefix (k-anonymity)</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="set-strip-ai" />
+              <span>Strip sponsor segments from transcript before AI</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="set-ai-sponsors" />
+              <span>AI fallback sponsor detection (when SponsorBlock has none)</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="set-inpage-hud" />
+              <span>Show visual chapter strip below YouTube player</span>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="set-shortcuts" />
+              <span>Keyboard shortcuts ([ / ] chapters, Alt+S skip, Alt+C toggle)</span>
+            </label>
+            <div id="category-rules-grid" class="rules-grid"></div>
+          </div>
+        </details>
+
+        <details class="accordion" open>
+          <summary class="accordion-summary">
+            <span class="chevron">▸</span>
+            <span>Settings Backup (JSON Export / Import)</span>
+          </summary>
+          <div class="accordion-body stack-sm">
+            <p class="muted" style="margin: 0; font-size: 11px;">
+              Export non-sensitive preferences safely, or export API keys &amp; GitHub token separately.
+            </p>
+            <div class="row-end" style="flex-wrap: wrap; gap: 6px;">
+              <button id="export-settings-safe-btn" type="button" class="btn btn-ghost btn-sm">
+                Export Non-Sensitive JSON
+              </button>
+              <button id="export-settings-secrets-btn" type="button" class="btn btn-ghost btn-sm">
+                Export Sensitive JSON
+              </button>
+              <label class="btn btn-primary btn-sm file-label" title="Import settings or secrets JSON">
+                Import Settings JSON
+                <input id="import-settings-json-input" type="file" accept="application/json" hidden />
+              </label>
+            </div>
+          </div>
+        </details>
       </section>
     </div>
 

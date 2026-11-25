@@ -1,4 +1,17 @@
-import type { BridgeTask, KnowledgeEntry, RuntimeMessage } from '../shared/types';
+import type {
+  BridgeTask,
+  KnowledgeEntry,
+  RuntimeMessage,
+  SubscriptionProvider,
+} from '../shared/types';
+
+function detectBridgeProvider(): SubscriptionProvider | undefined {
+  const host = window.location.hostname.toLowerCase();
+  if (host.includes('claude.ai')) return 'claude';
+  if (host.includes('chatgpt.com')) return 'chatgpt';
+  if (host.includes('gemini.google.com')) return 'gemini';
+  return undefined;
+}
 
 let pillHost: HTMLElement | null = null;
 let currentTask: BridgeTask | null = null;
@@ -208,7 +221,7 @@ function mountBridgePill(task: BridgeTask) {
   closeBtn.className = 'close';
   closeBtn.textContent = '✕';
   closeBtn.addEventListener('click', () => {
-    void sendRuntimeMessage({ type: 'CLEAR_BRIDGE_TASK' });
+    void sendRuntimeMessage({ type: 'CLEAR_BRIDGE_TASK', provider: detectBridgeProvider() });
     pillHost?.remove();
     pillHost = null;
   });
@@ -288,6 +301,7 @@ async function checkPendingBridgeTask() {
   try {
     const res = await sendRuntimeMessage<{ task: BridgeTask | null; bridgePillEnabled?: boolean }>({
       type: 'GET_BRIDGE_TASK',
+      provider: detectBridgeProvider(),
     });
     if (res.bridgePillEnabled === false) return;
     if (res.task && Date.now() - res.task.createdAt < 15 * 60 * 1000) {

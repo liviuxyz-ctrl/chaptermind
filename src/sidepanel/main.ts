@@ -26,18 +26,39 @@ import {
 import {
   exportAllToMarkdown,
   exportEntryToMarkdown,
+  getActiveEntries,
+  getTrashedEntries,
   searchKnowledgeBase,
 } from '../shared/kb-storage';
+import type { ActivityLogEntry, QueueJob } from '../shared/types';
+import { formatActivityLogsText, formatLogTimestamp } from '../shared/logs';
 import {
   addUniqueTopic,
   evaluateChapterRelevance,
   extractTopicFromChapter,
   removeTopic,
+  toggleChapterCare,
+  toggleChapterIgnore,
 } from '../shared/interests';
 import { parseGithubRepo } from '../shared/github-sync';
+import {
+  exportNonSensitiveSettings,
+  exportSensitiveSettings,
+  parseImportedSettingsJson,
+} from '../shared/settings-export';
+import { extractAllYouTubeVideoIds, extractYouTubeVideoId } from '../shared/youtube-url';
 
 let activeTabId: number | null = null;
 let videoState: ActiveVideoState | null = null;
+const tabStateByTabId = new Map<number, ActiveVideoState>();
+const analyzingVideoIds = new Set<string>();
+let openYouTubeTabs: Array<{
+  id: number;
+  windowId: number;
+  videoId: string;
+  title: string;
+  active: boolean;
+}> = [];
 let settings: ExtensionSettings = { ...DEFAULT_SETTINGS };
 let kbEntries: KnowledgeEntry[] = [];
 let expandedKbIds = new Set<string>();
@@ -45,6 +66,9 @@ let chapterSearch = '';
 let transcriptSearch = '';
 let kbSearch = '';
 let kbEntityFilter = 'all';
+let kbCategoryFilter = 'all';
+let kbViewingTrash = false;
+let addingCategoryInline = false;
 let lastWatchingRenderSig = '';
 
 function sendMessage<T = unknown>(msg: RuntimeMessage): Promise<T> {
@@ -170,6 +194,7 @@ function getWatchingRenderSignature(): string {
     settings.chapterFilterMode,
     settings.topicsIgnore.join(','),
     settings.topicsCare.join(','),
+    (settings.topicsAllow ?? []).join(','),
     settings.autoSkipIgnoredChapters ? 1 : 0,
     settings.hideIgnoredChapters ? 1 : 0,
     chapterSearch,
@@ -210,10 +235,134 @@ function getMergedChapters() {
   );
 }
 
+function isVideoBusyInQueue(videoId: string): boolean {
+  if (analyzingVideoIds.has(videoId)) return true;
+  return queueJobs.some(
+    (j) =>
+      j.videoId === videoId &&
+      (j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing')
+  );
+}
+
+function updateAnalyzeButtonState() {
+  const btn = document.getElementById('analyze-api-btn') as HTMLButtonElement | null;
+  if (!btn) return;
+  const vid = videoState?.meta?.videoId;
+  if (vid && analyzingVideoIds.has(vid)) {
+    btn.disabled = true;
+    btn.textContent = 'Analyzing...';
+  } else {
+    btn.disabled = false;
+    btn.textContent = 'Analyze';
+  }
+}
+
+function renderOpenTabsBar() {
+  const bar = document.getElementById('open-tabs-bar');
+  const list = document.getElementById('open-tabs-list');
+  const queueAllBtn = document.getElementById('queue-open-tabs-btn') as HTMLButtonElement | null;
+  if (!bar || !list) return;
+
+  if (openYouTubeTabs.length < 2) {
+    bar.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+
+  bar.classList.remove('hidden');
+  list.innerHTML = '';
+
+  const savedIds = new Set(kbEntries.map((e) => e.videoId));
+  let unsavedCount = 0;
+
+  for (const t of openYouTubeTabs) {
+    const isSaved = savedIds.has(t.videoId);
+    const isBusy = isVideoBusyInQueue(t.videoId);
+    if (!isSaved && !isBusy) unsavedCount += 1;
+
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = `open-tab-pill${t.id === activeTabId ? ' is-active' : ''}`;
+    pill.title = `${t.title}\nClick to switch to this YouTube tab`;
+
+    const dot = document.createElement('span');
+    dot.className = `open-tab-dot${isBusy ? ' is-busy' : isSaved ? ' is-kb' : ''}`;
+
+    const label = document.createElement('span');
+    label.className = 'open-tab-title';
+    label.textContent = t.title;
+
+    pill.append(dot, label);
+    pill.addEventListener('click', () => {
+      activeTabId = t.id;
+      const cached = tabStateByTabId.get(t.id);
+      if (cached) {
+        videoState = cached;
+        renderWatchingTab();
+        renderTranscriptTab();
+      }
+      renderOpenTabsBar();
+      void chrome.tabs
+        .update(t.id, { active: true })
+        .then(() => {
+          if (t.windowId) return chrome.windows.update(t.windowId, { focused: true });
+        })
+        .catch(() => {})
+        .finally(() => {
+          void syncActiveYouTubeTab();
+        });
+    });
+
+    list.appendChild(pill);
+  }
+
+  if (queueAllBtn) {
+    if (unsavedCount > 0) {
+      queueAllBtn.textContent = `Queue All (${unsavedCount})`;
+      queueAllBtn.disabled = false;
+    } else {
+      queueAllBtn.textContent = 'All in KB';
+      queueAllBtn.disabled = false;
+    }
+  }
+}
+
+async function refreshOpenYouTubeTabs() {
+  try {
+    const ytTabs = await chrome.tabs.query({
+      url: ['https://www.youtube.com/watch*', 'https://www.youtube.com/shorts/*'],
+    });
+    const next: typeof openYouTubeTabs = [];
+    for (const tab of ytTabs) {
+      if (!tab.id || !tab.url || tab.url.includes('cm_headless=1')) continue;
+      const videoId = extractYouTubeVideoId(tab.url);
+      if (!videoId) continue;
+      const cachedTitle = tabStateByTabId.get(tab.id)?.meta?.title;
+      const rawTitle =
+        cachedTitle ||
+        tab.title?.replace(/\s*-\s*YouTube$/, '').replace(/^\(\d+\)\s*/, '').trim() ||
+        videoId;
+      next.push({
+        id: tab.id,
+        windowId: tab.windowId,
+        videoId,
+        title: rawTitle,
+        active: Boolean(tab.active),
+      });
+    }
+    openYouTubeTabs = next;
+    renderOpenTabsBar();
+  } catch {
+    // ignore
+  }
+}
+
 function renderWatchingTab() {
   const noVideo = document.getElementById('no-video-card');
   const workspace = document.getElementById('video-workspace');
   if (!noVideo || !workspace) return;
+
+  updateAnalyzeButtonState();
 
   if (!videoState?.meta) {
     lastWatchingRenderSig = 'none';
@@ -267,12 +416,17 @@ function renderWatchingTab() {
   const kbSaved = document.getElementById('kb-saved-badge') as HTMLElement;
   kbSaved.classList.toggle('hidden', !videoState.kbEntry);
 
+  const tldrWrap = document.getElementById('tldr-wrap');
   const tldrEl = document.getElementById('video-tldr') as HTMLElement;
+  const tldrToggle = document.getElementById('tldr-toggle-btn') as HTMLButtonElement | null;
   if (videoState.kbEntry?.tldr) {
     tldrEl.textContent = videoState.kbEntry.tldr;
-    tldrEl.classList.remove('hidden');
+    tldrWrap?.classList.remove('hidden');
+    if (tldrToggle) {
+      tldrToggle.classList.toggle('hidden', videoState.kbEntry.tldr.length < 130);
+    }
   } else {
-    tldrEl.classList.add('hidden');
+    tldrWrap?.classList.add('hidden');
   }
 
   // Timeline bar
@@ -321,7 +475,7 @@ function renderWatchingTab() {
   timeline.appendChild(playhead);
 
   // Mode chips
-  document.querySelectorAll('#chapter-mode-chips .chip').forEach((chip) => {
+  document.querySelectorAll('#chapter-mode-chips .seg-btn').forEach((chip) => {
     const mode = (chip as HTMLElement).dataset.mode;
     chip.classList.toggle('active', mode === settings.chapterFilterMode);
   });
@@ -389,59 +543,61 @@ function renderWatchingTab() {
       const right = document.createElement('div');
       right.className = 'item-right';
 
-      if (rel.relevance === 'skip') {
-        const skipBadge = document.createElement('span');
-        skipBadge.className = 'src-badge src-skip';
-        skipBadge.textContent = 'SKIP';
-        right.appendChild(skipBadge);
-      } else if (rel.relevance === 'must_watch') {
-        const careBadge = document.createElement('span');
-        careBadge.className = 'src-badge src-care';
-        careBadge.textContent = '★';
-        right.appendChild(careBadge);
-      }
-
-      const src = document.createElement('span');
-      src.className = `src-badge src-${ch.source}`;
-      src.textContent = ch.source === 'sponsorblock' ? 'SB' : ch.source;
-
       const fb = document.createElement('div');
-      fb.className = 'feedback-btns';
+      fb.className = `feedback-btns${
+        rel.relevance === 'must_watch' || rel.relevance === 'skip' ? ' has-active' : ''
+      }`;
 
       const careBtn = document.createElement('button');
       careBtn.type = 'button';
       careBtn.className = `fb-btn${rel.relevance === 'must_watch' ? ' is-active-care' : ''}`;
       careBtn.textContent = '★';
-      careBtn.title = 'I care about this topic';
+      careBtn.title =
+        rel.relevance === 'must_watch' ? 'Remove from Topics I Care About' : 'I care about this topic';
       careBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const topic = extractTopicFromChapter(ch);
+        const res = toggleChapterCare(ch, settings);
         void saveInterestUpdate({
-          topicsCare: addUniqueTopic(settings.topicsCare, topic),
-          topicsIgnore: removeTopic(settings.topicsIgnore, topic),
+          topicsCare: res.topicsCare,
+          topicsIgnore: res.topicsIgnore,
+          topicsAllow: res.topicsAllow,
         }).then(() => {
-          showBanner(`Added "${topic}" to Topics I Care About`, 'success');
+          showBanner(
+            res.action === 'cared'
+              ? `Added "${res.topic}" to Topics I Care About`
+              : `Removed "${res.topic}" from Topics I Care About`,
+            'success'
+          );
         });
       });
 
       const skipBtn = document.createElement('button');
       skipBtn.type = 'button';
       skipBtn.className = `fb-btn${rel.relevance === 'skip' ? ' is-active-skip' : ''}`;
-      skipBtn.textContent = '👎';
-      skipBtn.title = "Don't care — auto-skip this topic in future videos too";
+      skipBtn.textContent = rel.relevance === 'skip' ? '↩' : '⊘';
+      skipBtn.title =
+        rel.relevance === 'skip'
+          ? 'Un-ignore this topic (stop auto-skipping)'
+          : "Don't care — auto-skip this topic in future videos too";
       skipBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const topic = extractTopicFromChapter(ch);
+        const res = toggleChapterIgnore(ch, settings);
         void saveInterestUpdate({
-          topicsIgnore: addUniqueTopic(settings.topicsIgnore, topic),
-          topicsCare: removeTopic(settings.topicsCare, topic),
+          topicsIgnore: res.topicsIgnore,
+          topicsCare: res.topicsCare,
+          topicsAllow: res.topicsAllow,
         }).then(() => {
-          showBanner(`Added "${topic}" to Don't Care list — auto-skipping!`, 'success');
+          showBanner(
+            res.action === 'ignored'
+              ? `Added "${res.topic}" to Don't Care list — auto-skipping!`
+              : `Un-ignored "${res.topic}" — no longer skipping`,
+            'success'
+          );
         });
       });
 
       fb.append(careBtn, skipBtn);
-      right.append(src, fb);
+      right.appendChild(fb);
 
       top.append(left, right);
       card.appendChild(top);
@@ -633,6 +789,11 @@ function renderInterestFilterBar() {
   const hideEl = document.getElementById('hide-skipped-toggle') as HTMLInputElement | null;
   if (hideEl) hideEl.checked = settings.hideIgnoredChapters;
 
+  const countLabel = document.getElementById('interest-count-label');
+  if (countLabel) {
+    countLabel.textContent = String(settings.topicsIgnore.length);
+  }
+
   renderTopicChips('quick-ignore-chips', settings.topicsIgnore, 'ignore', (topic) => {
     void saveInterestUpdate({ topicsIgnore: removeTopic(settings.topicsIgnore, topic) });
   });
@@ -669,29 +830,192 @@ async function openOrSeekVideo(videoId: string, seconds: number) {
   });
 }
 
-function renderKbTab() {
-  const entityCount = kbEntries.reduce((acc, e) => acc + e.entities.length, 0);
-  const strippedSec = kbEntries.reduce((acc, e) => acc + (e.sponsorTimeStrippedSec || 0), 0);
+function renderCategoryChips() {
+  const wrap = document.getElementById('kb-category-chips');
+  if (!wrap) return;
+  wrap.innerHTML = '';
 
-  (document.getElementById('stat-videos') as HTMLElement).textContent = String(kbEntries.length);
+  const categories = settings.kbCategories?.length
+    ? settings.kbCategories
+    : ['Work', 'AI & Tech', 'Learning', 'Personal'];
+
+  const makeChip = (label: string, value: string) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `chip${!kbViewingTrash && kbCategoryFilter === value ? ' active' : ''}`;
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      kbViewingTrash = false;
+      kbCategoryFilter = value;
+      renderKbTab();
+    });
+    return btn;
+  };
+
+  wrap.appendChild(makeChip('All', 'all'));
+  for (const cat of categories) {
+    wrap.appendChild(makeChip(cat, cat));
+  }
+  wrap.appendChild(makeChip('Uncategorized', 'uncategorized'));
+
+  if (addingCategoryInline) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'input input-sm';
+    input.placeholder = 'New category...';
+    input.style.width = '110px';
+    input.style.padding = '2px 6px';
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const val = input.value.trim();
+        addingCategoryInline = false;
+        if (val) {
+          const nextCats = addUniqueTopic(categories, val);
+          kbCategoryFilter = val;
+          kbViewingTrash = false;
+          void saveInterestUpdate({ kbCategories: nextCats }).then(() => {
+            renderKbTab();
+          });
+        } else {
+          renderKbTab();
+        }
+      } else if (e.key === 'Escape') {
+        addingCategoryInline = false;
+        renderKbTab();
+      }
+    });
+    input.addEventListener('blur', () => {
+      addingCategoryInline = false;
+      renderKbTab();
+    });
+    wrap.appendChild(input);
+    window.setTimeout(() => input.focus(), 0);
+  } else {
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'chip';
+    addBtn.textContent = '+';
+    addBtn.title = 'Add custom Library category (e.g. Work)';
+    addBtn.addEventListener('click', () => {
+      addingCategoryInline = true;
+      renderKbTab();
+    });
+    wrap.appendChild(addBtn);
+  }
+}
+
+function renderKbTab() {
+  const activeEntries = getActiveEntries(kbEntries);
+  const trashedEntries = getTrashedEntries(kbEntries);
+  const entityCount = activeEntries.reduce((acc, e) => acc + e.entities.length, 0);
+  const strippedSec = activeEntries.reduce((acc, e) => acc + (e.sponsorTimeStrippedSec || 0), 0);
+
+  (document.getElementById('stat-videos') as HTMLElement).textContent = String(activeEntries.length);
   (document.getElementById('stat-entities') as HTMLElement).textContent = String(entityCount);
   (document.getElementById('stat-saved-time') as HTMLElement).textContent =
     `${Math.round(strippedSec / 60)}m`;
 
+  renderCategoryChips();
+
+  const trashBtn = document.getElementById('kb-trash-tab-btn');
+  if (trashBtn) {
+    trashBtn.textContent = `🗑 Trash (${trashedEntries.length})`;
+    trashBtn.classList.toggle('active', kbViewingTrash);
+  }
+  const trashBanner = document.getElementById('kb-trash-banner');
+  const trashInfo = document.getElementById('kb-trash-info');
+  const entityChips = document.getElementById('kb-entity-chips');
+  const retentionDays = settings.trashRetentionDays || 30;
+  trashBanner?.classList.toggle('hidden', !kbViewingTrash);
+  entityChips?.classList.toggle('hidden', kbViewingTrash);
+  if (trashInfo) {
+    trashInfo.textContent = `${trashedEntries.length} in Recycle Bin (kept ${retentionDays}d before auto-purge).`;
+  }
+
   const list = document.getElementById('kb-list') as HTMLElement;
   list.textContent = '';
 
-  const results = searchKnowledgeBase(kbEntries, kbSearch, kbEntityFilter);
+  if (kbViewingTrash) {
+    const filteredTrash = searchKnowledgeBase(trashedEntries, kbSearch, 'all', 'all');
+    if (filteredTrash.length === 0) {
+      const p = document.createElement('p');
+      p.className = 'muted-small';
+      p.textContent = 'Recycle Bin is empty.';
+      list.appendChild(p);
+      return;
+    }
+
+    for (const { entry } of filteredTrash) {
+      const card = document.createElement('div');
+      card.className = 'item-card';
+
+      const top = document.createElement('div');
+      top.className = 'item-top';
+
+      const title = document.createElement('span');
+      title.className = 'item-title';
+      title.textContent = entry.title;
+
+      const daysLeft = Math.max(
+        1,
+        Math.ceil(retentionDays - (Date.now() - (entry.trashedAt ?? Date.now())) / 86_400_000)
+      );
+      const rowActions = document.createElement('div');
+      rowActions.className = 'kb-row-actions';
+
+      const daysBadge = document.createElement('span');
+      daysBadge.className = 'muted-small';
+      daysBadge.textContent = `${daysLeft}d left`;
+
+      const restoreBtn = document.createElement('button');
+      restoreBtn.type = 'button';
+      restoreBtn.className = 'btn btn-xs';
+      restoreBtn.textContent = '↩ Restore';
+      restoreBtn.addEventListener('click', async () => {
+        await sendMessage({ type: 'KB_RESTORE', videoId: entry.videoId });
+        await loadKb();
+        showBanner(`Restored "${entry.title.slice(0, 36)}" to Library!`, 'success');
+      });
+
+      const delPermBtn = document.createElement('button');
+      delPermBtn.type = 'button';
+      delPermBtn.className = 'btn btn-xs btn-danger';
+      delPermBtn.textContent = 'Delete';
+      delPermBtn.title = 'Delete permanently now';
+      delPermBtn.addEventListener('click', async () => {
+        await sendMessage({ type: 'KB_DELETE', videoId: entry.videoId });
+        await loadKb();
+      });
+
+      rowActions.append(daysBadge, restoreBtn, delPermBtn);
+      top.append(title, rowActions);
+
+      const sub = document.createElement('div');
+      sub.className = 'item-sub';
+      sub.textContent = `${entry.channelName}${entry.category ? ` · ${entry.category}` : ''}`;
+
+      card.append(top, sub);
+      list.appendChild(card);
+    }
+    return;
+  }
+
+  const results = searchKnowledgeBase(activeEntries, kbSearch, kbEntityFilter, kbCategoryFilter);
   if (results.length === 0) {
     const p = document.createElement('p');
     p.className = 'muted-small';
     p.textContent =
-      kbEntries.length === 0
+      activeEntries.length === 0
         ? 'No saved videos yet. Analyze a YouTube video to build your AI Knowledge Base.'
         : 'No matching entries found.';
     list.appendChild(p);
     return;
   }
+
+  const categories = settings.kbCategories?.length
+    ? settings.kbCategories
+    : ['Work', 'AI & Tech', 'Learning', 'Personal'];
 
   for (const { entry, bestTimestampSec, matchSnippet } of results) {
     const card = document.createElement('div');
@@ -718,11 +1042,34 @@ function renderKbTab() {
 
     left.append(ts, title);
 
+    const rowActions = document.createElement('div');
+    rowActions.className = 'kb-row-actions';
+
+    if (entry.category?.trim()) {
+      const catBadge = document.createElement('span');
+      catBadge.className = 'kb-cat-badge';
+      catBadge.textContent = entry.category;
+      rowActions.appendChild(catBadge);
+    }
+
     const metaBadge = document.createElement('span');
     metaBadge.className = 'src-badge src-ai';
     metaBadge.textContent = `${entry.chapters.length} ch`;
 
-    top.append(left, metaBadge);
+    const quickTrashBtn = document.createElement('button');
+    quickTrashBtn.type = 'button';
+    quickTrashBtn.className = 'kb-trash-btn';
+    quickTrashBtn.textContent = '🗑';
+    quickTrashBtn.title = `Move to Recycle Bin (kept ${retentionDays} days)`;
+    quickTrashBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await sendMessage({ type: 'KB_TRASH', videoId: entry.videoId });
+      await loadKb();
+      showBanner(`Moved to Recycle Bin (kept ${retentionDays}d).`, 'info');
+    });
+
+    rowActions.append(metaBadge, quickTrashBtn);
+    top.append(left, rowActions);
 
     const sub = document.createElement('div');
     sub.className = 'item-sub';
@@ -793,12 +1140,55 @@ function renderKbTab() {
         tkList.className = 'stack-sm';
         for (const tk of entry.keyTakeaways) {
           const row = document.createElement('div');
-          row.className = 'item-sub';
-          row.textContent = `[${formatTimestamp(tk.timestampSec)}] ${tk.text}`;
+          row.className = 'takeaway-link';
+          row.title = 'Jump to timestamp';
+          row.addEventListener('click', () => {
+            void openOrSeekVideo(entry.videoId, tk.timestampSec);
+          });
+          const tkTs = document.createElement('span');
+          tkTs.className = 'ts-badge';
+          tkTs.textContent = formatTimestamp(tk.timestampSec);
+          const tkText = document.createElement('span');
+          tkText.textContent = tk.text;
+          row.append(tkTs, tkText);
           tkList.appendChild(row);
         }
         detail.appendChild(tkList);
       }
+
+      const catRow = document.createElement('div');
+      catRow.className = 'kb-cat-select-row';
+      const catLabel = document.createElement('span');
+      catLabel.textContent = 'Category';
+      const catSel = document.createElement('select');
+      catSel.className = 'input kb-cat-select';
+      const noneOpt = document.createElement('option');
+      noneOpt.value = '';
+      noneOpt.textContent = 'Uncategorized';
+      catSel.appendChild(noneOpt);
+      for (const c of categories) {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        catSel.appendChild(opt);
+      }
+      if (entry.category && !categories.includes(entry.category)) {
+        const extraOpt = document.createElement('option');
+        extraOpt.value = entry.category;
+        extraOpt.textContent = entry.category;
+        catSel.appendChild(extraOpt);
+      }
+      catSel.value = entry.category || '';
+      catSel.addEventListener('change', async () => {
+        await sendMessage({
+          type: 'KB_SET_CATEGORY',
+          videoId: entry.videoId,
+          category: catSel.value,
+        });
+        await loadKb();
+      });
+      catRow.append(catLabel, catSel);
+      detail.appendChild(catRow);
 
       const actions = document.createElement('div');
       actions.className = 'row-end';
@@ -823,16 +1213,17 @@ function renderKbTab() {
         );
       });
 
-      const delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'btn btn-xs btn-danger';
-      delBtn.textContent = 'Delete';
-      delBtn.addEventListener('click', async () => {
-        await sendMessage({ type: 'KB_DELETE', videoId: entry.videoId });
+      const trashBtnCard = document.createElement('button');
+      trashBtnCard.type = 'button';
+      trashBtnCard.className = 'btn btn-xs btn-danger';
+      trashBtnCard.textContent = 'Move to Trash';
+      trashBtnCard.addEventListener('click', async () => {
+        await sendMessage({ type: 'KB_TRASH', videoId: entry.videoId });
         await loadKb();
+        showBanner(`Moved "${entry.title.slice(0, 36)}" to Recycle Bin.`, 'info');
       });
 
-      actions.append(openBtn, mdBtn, delBtn);
+      actions.append(openBtn, mdBtn, trashBtnCard);
       detail.appendChild(actions);
       card.appendChild(detail);
     }
@@ -911,23 +1302,26 @@ async function loadKb() {
   const res = await sendMessage<{ entries: KnowledgeEntry[] }>({ type: 'KB_LIST' });
   kbEntries = res.entries ?? [];
   renderKbTab();
+  renderOpenTabsBar();
 }
 
 async function syncActiveYouTubeTab() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !tab.url?.includes('youtube.com/watch')) {
+  const isHeadless = (u?: string) => Boolean(u && u.includes('cm_headless=1'));
+  if (!tab?.id || !tab.url?.includes('youtube.com/watch') || isHeadless(tab.url)) {
     const ytTabs = await chrome.tabs.query({
       url: ['https://www.youtube.com/watch*', 'https://www.youtube.com/shorts/*'],
       currentWindow: true,
     });
-    tab = ytTabs[0];
+    tab = ytTabs.find((t) => !isHeadless(t.url)) ?? undefined;
   }
   activeTabId = tab?.id ?? null;
 
-  if (!tab?.id || !tab.url?.includes('youtube.com/')) {
+  if (!tab?.id || !tab.url?.includes('youtube.com/') || isHeadless(tab.url)) {
     videoState = null;
     renderWatchingTab();
     renderTranscriptTab();
+    void refreshOpenYouTubeTabs();
     return;
   }
 
@@ -936,12 +1330,16 @@ async function syncActiveYouTubeTab() {
       type: 'GET_ACTIVE_VIDEO_STATE',
     });
     videoState = res?.state ?? null;
+    if (videoState) {
+      tabStateByTabId.set(tab.id, videoState);
+    }
   } catch {
     videoState = null;
   }
 
   renderWatchingTab();
   renderTranscriptTab();
+  void refreshOpenYouTubeTabs();
 }
 
 function collectSettingsFromForm(): Partial<ExtensionSettings> {
@@ -1101,7 +1499,15 @@ function bindEvents() {
     if (target) void seekVideo(target.startTime);
   });
 
-  document.querySelectorAll('#chapter-mode-chips .chip').forEach((chip) => {
+  document.getElementById('tldr-toggle-btn')?.addEventListener('click', (e) => {
+    const tldr = document.getElementById('video-tldr');
+    const btn = e.currentTarget as HTMLButtonElement;
+    if (!tldr) return;
+    const expanded = !tldr.classList.toggle('clamped');
+    btn.textContent = expanded ? 'Less' : 'More';
+  });
+
+  document.querySelectorAll('#chapter-mode-chips .seg-btn').forEach((chip) => {
     chip.addEventListener('click', async () => {
       const mode = (chip as HTMLElement).dataset.mode as ChapterFilterMode;
       const res = await sendMessage<{ settings: ExtensionSettings }>({
@@ -1118,39 +1524,62 @@ function bindEvents() {
     renderWatchingTab();
   });
 
-  // Analyze via API
-  document.getElementById('analyze-api-btn')?.addEventListener('click', async (e) => {
+  // Analyze via API (safe across concurrent multi-tab / multi-video switches)
+  document.getElementById('analyze-api-btn')?.addEventListener('click', async () => {
     if (!videoState?.meta) return;
     if (videoState.transcript.length === 0) {
       showBanner('No transcript available for this video yet.', 'error');
       return;
     }
-    const btn = e.currentTarget as HTMLButtonElement;
-    btn.disabled = true;
-    btn.textContent = 'Analyzing...';
-    showBanner('Stripping SponsorBlock ads & analyzing transcript via AI API...', 'info');
+
+    const targetMeta = videoState.meta;
+    const targetVideoId = targetMeta.videoId;
+    if (analyzingVideoIds.has(targetVideoId)) return;
+
+    const targetTranscript = [...videoState.transcript];
+    const targetChapters = [...videoState.youtubeChapters];
+    const targetSponsors = [...videoState.sponsorSegments];
+
+    analyzingVideoIds.add(targetVideoId);
+    updateAnalyzeButtonState();
+    renderOpenTabsBar();
+    showBanner(`Analyzing "${targetMeta.title.slice(0, 42)}" via AI API...`, 'info');
 
     try {
       const res = await sendMessage<{ entry: KnowledgeEntry }>({
         type: 'ANALYZE_VIDEO_API',
-        meta: videoState.meta,
-        transcript: videoState.transcript,
-        youtubeChapters: videoState.youtubeChapters,
-        sponsorSegments: videoState.sponsorSegments,
+        meta: targetMeta,
+        transcript: targetTranscript,
+        youtubeChapters: targetChapters,
+        sponsorSegments: targetSponsors,
       });
-      videoState.kbEntry = res.entry;
-      videoState.aiSponsors = res.entry.aiSponsors;
-      renderWatchingTab();
+
+      for (const [tid, st] of tabStateByTabId.entries()) {
+        if (st.meta?.videoId === res.entry.videoId) {
+          tabStateByTabId.set(tid, {
+            ...st,
+            kbEntry: res.entry,
+            aiSponsors: res.entry.aiSponsors,
+          });
+        }
+      }
+
+      if (videoState?.meta?.videoId === res.entry.videoId) {
+        videoState.kbEntry = res.entry;
+        videoState.aiSponsors = res.entry.aiSponsors;
+        renderWatchingTab();
+      }
       await loadKb();
       showBanner(
-        `Saved ${res.entry.chapters.length} AI chapters & ${res.entry.entities.length} entities to KB!`,
+        `Saved ${res.entry.chapters.length} AI chapters for "${res.entry.title.slice(0, 36)}"!`,
         'success'
       );
     } catch (err) {
       showBanner(err instanceof Error ? err.message : 'API analysis failed', 'error');
     } finally {
-      btn.disabled = false;
-      btn.textContent = '✨ Analyze via API';
+      analyzingVideoIds.delete(targetVideoId);
+      updateAnalyzeButtonState();
+      renderOpenTabsBar();
     }
   });
 
@@ -1403,17 +1832,30 @@ function bindEvents() {
   document.getElementById('open-gh-repo-btn')?.addEventListener('click', openConfiguredGithubRepo);
 
   document.getElementById('export-all-md-btn')?.addEventListener('click', () => {
-    if (kbEntries.length === 0) return;
-    downloadTextFile('chaptermind-knowledge-base.md', exportAllToMarkdown(kbEntries), 'text/markdown');
+    const active = getActiveEntries(kbEntries);
+    if (active.length === 0) return;
+    downloadTextFile('chaptermind-knowledge-base.md', exportAllToMarkdown(active), 'text/markdown');
   });
 
   document.getElementById('export-all-json-btn')?.addEventListener('click', () => {
-    if (kbEntries.length === 0) return;
+    const active = getActiveEntries(kbEntries);
+    if (active.length === 0) return;
     downloadTextFile(
       'chaptermind-knowledge-base.json',
-      JSON.stringify(kbEntries, null, 2),
+      JSON.stringify(active, null, 2),
       'application/json'
     );
+  });
+
+  document.getElementById('kb-trash-tab-btn')?.addEventListener('click', () => {
+    kbViewingTrash = !kbViewingTrash;
+    renderKbTab();
+  });
+
+  document.getElementById('kb-empty-trash-btn')?.addEventListener('click', async () => {
+    const res = await sendMessage<{ ok: boolean; deletedCount: number }>({ type: 'KB_EMPTY_TRASH' });
+    await loadKb();
+    showBanner(`Permanently deleted ${res.deletedCount} trashed item(s).`, 'info');
   });
 
   document.getElementById('import-json-input')?.addEventListener('change', async (e) => {
@@ -1453,6 +1895,144 @@ function bindEvents() {
     });
     settings = res.settings;
     showBanner('Settings saved!', 'success');
+  });
+
+  document.getElementById('export-settings-safe-btn')?.addEventListener('click', () => {
+    const payload = exportNonSensitiveSettings(settings);
+    downloadTextFile(
+      'chaptermind-settings.json',
+      JSON.stringify(payload, null, 2),
+      'application/json'
+    );
+    showBanner('Exported non-sensitive settings JSON.', 'success');
+  });
+
+  document.getElementById('export-settings-secrets-btn')?.addEventListener('click', () => {
+    const payload = exportSensitiveSettings(settings);
+    downloadTextFile(
+      'chaptermind-secrets.json',
+      JSON.stringify(payload, null, 2),
+      'application/json'
+    );
+    showBanner('Exported sensitive credentials JSON. Keep this file private.', 'info');
+  });
+
+  document.getElementById('import-settings-json-input')?.addEventListener('change', async (e) => {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const partial = parseImportedSettingsJson(text);
+      const res = await sendMessage<{ settings: ExtensionSettings }>({
+        type: 'SETTINGS_SAVE',
+        settings: partial,
+      });
+      settings = res.settings;
+      renderSettingsTab();
+      showBanner(`Imported ${Object.keys(partial).length} setting(s)!`, 'success');
+    } catch (err) {
+      showBanner(err instanceof Error ? err.message : 'Settings JSON import failed', 'error');
+    } finally {
+      input.value = '';
+    }
+  });
+
+  document.getElementById('queue-clear-done-btn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    void sendMessage<{ jobs: QueueJob[] }>({ type: 'QUEUE_CLEAR_DONE' }).then((res) => {
+      queueJobs = res.jobs ?? [];
+      renderQueueCard();
+    });
+  });
+
+  document.getElementById('logs-copy-btn')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (activityLogs.length === 0) {
+      showBanner('No activity logs to copy yet.', 'info');
+      return;
+    }
+    await navigator.clipboard.writeText(formatActivityLogsText(activityLogs));
+    showBanner(`Copied ${activityLogs.length} log entries to clipboard!`, 'success');
+  });
+
+  document.getElementById('logs-clear-btn')?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await sendMessage({ type: 'LOGS_CLEAR' });
+    activityLogs = [];
+    renderLogsDrawer();
+  });
+
+  document.getElementById('queue-open-tabs-btn')?.addEventListener('click', async () => {
+    try {
+      const res = await sendMessage<{
+        ok: boolean;
+        queuedCount: number;
+        skippedSavedCount: number;
+        jobs: QueueJob[];
+      }>({ type: 'QUEUE_ADD_OPEN_TABS', onlyUnsaved: true });
+      queueJobs = res.jobs ?? [];
+      renderQueueCard();
+      renderOpenTabsBar();
+      if (res.queuedCount > 0) {
+        showBanner(
+          `Queued ${res.queuedCount} open YouTube video${res.queuedCount > 1 ? 's' : ''} in Library → Headless Queue!`,
+          'success'
+        );
+      } else {
+        showBanner(
+          `All ${res.skippedSavedCount} open YouTube videos are already in your Library.`,
+          'info'
+        );
+      }
+    } catch (err) {
+      showBanner(err instanceof Error ? err.message : 'Could not queue open tabs', 'error');
+    }
+  });
+
+  document.getElementById('queue-add-btn')?.addEventListener('click', async () => {
+    const input = document.getElementById('queue-url-input') as HTMLInputElement | null;
+    const raw = input?.value.trim() ?? '';
+    if (!raw) return;
+    const ids = extractAllYouTubeVideoIds(raw);
+    if (ids.length === 0) {
+      showBanner('Could not recognize a valid YouTube URL or 11-char video ID.', 'error');
+      return;
+    }
+
+    if (ids.length === 1) {
+      const res = await sendMessage<{ ok: boolean; jobs: QueueJob[] }>({
+        type: 'QUEUE_ADD',
+        urlOrId: ids[0]!,
+      });
+      if (!res.ok) {
+        showBanner('Could not recognize a valid YouTube URL or 11-char video ID.', 'error');
+        return;
+      }
+      queueJobs = res.jobs ?? [];
+      showBanner('Queued video for headless background analysis!', 'success');
+    } else {
+      const res = await sendMessage<{ ok: boolean; addedCount: number; jobs: QueueJob[] }>({
+        type: 'QUEUE_ADD_BATCH',
+        items: ids.map((id) => ({ urlOrId: id })),
+      });
+      queueJobs = res.jobs ?? [];
+      showBanner(`Queued ${res.addedCount} videos for headless analysis!`, 'success');
+    }
+
+    if (input) input.value = '';
+    renderQueueCard();
+    renderOpenTabsBar();
+  });
+
+  document.getElementById('queue-url-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('queue-add-btn')?.click();
+    }
   });
 
   document.getElementById('save-gh-settings-btn')?.addEventListener('click', async () => {
@@ -1516,8 +2096,19 @@ function bindEvents() {
 
 chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
   if (msg.type === 'VIDEO_STATE_CHANGED') {
+    if (sender.tab?.url?.includes('cm_headless=1')) {
+      return;
+    }
     if (sender.tab?.id) {
-      activeTabId = sender.tab.id;
+      tabStateByTabId.set(sender.tab.id, msg.state);
+      // Never let an inactive background YouTube tab overwrite the currently inspected video
+      if (!sender.tab.active && sender.tab.id !== activeTabId) {
+        renderOpenTabsBar();
+        return;
+      }
+      if (sender.tab.active) {
+        activeTabId = sender.tab.id;
+      }
     }
     videoState = msg.state;
     const nextSig = getWatchingRenderSignature();
@@ -1527,7 +2118,38 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
       renderWatchingTab();
       renderTranscriptTab();
     }
+    renderOpenTabsBar();
+  } else if (msg.type === 'SETTINGS_UPDATED') {
+    settings = msg.settings;
+    renderWatchingTab();
+    renderTranscriptTab();
+    renderSettingsInterestChips();
+  } else if (msg.type === 'ANALYSIS_COMPLETED') {
+    for (const [tid, st] of tabStateByTabId.entries()) {
+      if (st.meta?.videoId === msg.entry.videoId) {
+        tabStateByTabId.set(tid, {
+          ...st,
+          kbEntry: msg.entry,
+          aiSponsors: msg.entry.aiSponsors,
+        });
+      }
+    }
+    if (videoState?.meta?.videoId === msg.entry.videoId) {
+      videoState.kbEntry = msg.entry;
+      videoState.aiSponsors = msg.entry.aiSponsors;
+      renderWatchingTab();
+    }
+    void loadKb();
   } else if (msg.type === 'BRIDGE_ANALYSIS_READY') {
+    for (const [tid, st] of tabStateByTabId.entries()) {
+      if (st.meta?.videoId === msg.entry.videoId) {
+        tabStateByTabId.set(tid, {
+          ...st,
+          kbEntry: msg.entry,
+          aiSponsors: msg.entry.aiSponsors,
+        });
+      }
+    }
     if (videoState?.meta?.videoId === msg.entry.videoId) {
       videoState.kbEntry = msg.entry;
       videoState.aiSponsors = msg.entry.aiSponsors;
@@ -1545,11 +2167,269 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
       ansBox.textContent = msg.answer;
     }
     showBanner('Captured answer from your AI subscription!', 'success');
+  } else if (msg.type === 'QUEUE_UPDATED') {
+    queueJobs = msg.jobs;
+    renderQueueCard();
+    renderOpenTabsBar();
+    updateAnalyzeButtonState();
+    if (queueJobs.some((j) => j.status === 'done')) {
+      void loadKb();
+    }
+  } else if (msg.type === 'LOGS_UPDATED') {
+    activityLogs = msg.logs;
+    renderLogsDrawer();
   }
 });
 
+let queueJobs: QueueJob[] = [];
+let queueElapsedTimer: number | null = null;
+
+function formatActiveQueueText(status: QueueJob['status'], sinceMs: number): string {
+  const sec = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000));
+  const suffix = sec >= 1 ? ` ${sec}s` : '';
+  if (status === 'queued') return `Queued${suffix}`;
+  if (status === 'fetching_transcript') return `Extracting captions…${suffix}`;
+  if (status === 'analyzing') return `Analyzing AI…${suffix}`;
+  return '';
+}
+
+function formatQueueStatusLabel(job: QueueJob): { label: string; cls: string; activeSince?: number } {
+  const since = job.updatedAt || job.addedAt || Date.now();
+  if (job.status === 'queued' || job.status === 'fetching_transcript' || job.status === 'analyzing') {
+    return { label: formatActiveQueueText(job.status, since), cls: 'is-running', activeSince: since };
+  }
+  if (job.status === 'done') {
+    const ch = job.chapterCount ?? 0;
+    const ent = job.entityCount ?? 0;
+    return { label: `✓ ${ch} ch · ${ent} ent`, cls: 'is-done' };
+  }
+  return { label: 'Failed', cls: 'is-error' };
+}
+
+function syncQueueElapsedTimer() {
+  const hasRunning = queueJobs.some(
+    (j) => j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing'
+  );
+  if (hasRunning && queueElapsedTimer === null) {
+    queueElapsedTimer = window.setInterval(() => {
+      document.querySelectorAll<HTMLElement>('.queue-badge[data-queue-since]').forEach((el) => {
+        const st = el.dataset.queueStatus as QueueJob['status'] | undefined;
+        const since = Number(el.dataset.queueSince);
+        if (st && Number.isFinite(since)) {
+          el.textContent = formatActiveQueueText(st, since);
+        }
+      });
+    }, 1000);
+  } else if (!hasRunning && queueElapsedTimer !== null) {
+    window.clearInterval(queueElapsedTimer);
+    queueElapsedTimer = null;
+  }
+}
+
+function renderQueueCard() {
+  const card = document.getElementById('queue-card') as HTMLDetailsElement | null;
+  const badge = document.getElementById('queue-summary-badge');
+  const list = document.getElementById('queue-list');
+  if (!card || !badge || !list) return;
+
+  if (queueJobs.length === 0) {
+    card.classList.add('hidden');
+    badge.textContent = '0';
+    list.innerHTML = '';
+    syncQueueElapsedTimer();
+    return;
+  }
+
+  card.classList.remove('hidden');
+  const activeCount = queueJobs.filter(
+    (j) => j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing'
+  ).length;
+  if (activeCount > 0) {
+    card.open = true;
+  }
+  badge.textContent = activeCount > 0 ? `${activeCount} active` : `${queueJobs.length}`;
+
+  list.innerHTML = '';
+  for (const job of queueJobs) {
+    const item = document.createElement('div');
+    item.className = 'queue-item';
+
+    const head = document.createElement('div');
+    head.className = 'queue-item-head';
+
+    const title = document.createElement('span');
+    title.className = 'queue-item-title';
+    title.textContent = job.title || job.videoId;
+    title.title = job.title || job.videoId;
+
+    const headActions = document.createElement('div');
+    headActions.className = 'kb-row-actions';
+
+    if (job.status === 'fetching_transcript' || job.status === 'analyzing') {
+      const forceRetryBtn = document.createElement('button');
+      forceRetryBtn.type = 'button';
+      forceRetryBtn.className = 'btn btn-ghost btn-xs';
+      forceRetryBtn.textContent = '↻';
+      forceRetryBtn.title = 'Cancel stuck attempt & retry now';
+      forceRetryBtn.addEventListener('click', async () => {
+        await sendMessage({ type: 'QUEUE_REMOVE', videoId: job.videoId });
+        const res = await sendMessage<{ jobs: QueueJob[] }>({
+          type: 'QUEUE_ADD',
+          urlOrId: job.videoId,
+          title: job.title,
+          channelName: job.channelName,
+        });
+        queueJobs = res.jobs ?? [];
+        renderQueueCard();
+      });
+      headActions.appendChild(forceRetryBtn);
+    }
+
+    const rmBtn = document.createElement('button');
+    rmBtn.type = 'button';
+    rmBtn.className = 'btn btn-ghost btn-xs';
+    rmBtn.textContent = '✕';
+    rmBtn.title = 'Remove / cancel from queue';
+    rmBtn.addEventListener('click', () => {
+      void sendMessage<{ jobs: QueueJob[] }>({
+        type: 'QUEUE_REMOVE',
+        videoId: job.videoId,
+      }).then((res) => {
+        queueJobs = res.jobs ?? [];
+        renderQueueCard();
+      });
+    });
+
+    headActions.appendChild(rmBtn);
+    head.append(title, headActions);
+
+    const meta = document.createElement('div');
+    meta.className = 'queue-item-meta';
+
+    const statusInfo = formatQueueStatusLabel(job);
+    const pill = document.createElement('span');
+    pill.className = `queue-badge ${statusInfo.cls}`;
+    pill.textContent = statusInfo.label;
+    if (statusInfo.activeSince) {
+      pill.dataset.queueStatus = job.status;
+      pill.dataset.queueSince = String(statusInfo.activeSince);
+    }
+    if (job.error) pill.title = job.error;
+
+    const actions = document.createElement('span');
+    if (job.status === 'error') {
+      const retryBtn = document.createElement('button');
+      retryBtn.type = 'button';
+      retryBtn.className = 'btn btn-ghost btn-xs';
+      retryBtn.textContent = 'Retry';
+      retryBtn.addEventListener('click', () => {
+        void sendMessage<{ jobs: QueueJob[] }>({
+          type: 'QUEUE_ADD',
+          urlOrId: job.videoId,
+          title: job.title,
+          channelName: job.channelName,
+        }).then((res) => {
+          queueJobs = res.jobs ?? [];
+          renderQueueCard();
+        });
+      });
+      actions.appendChild(retryBtn);
+    } else if (job.status === 'done') {
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'btn btn-ghost btn-xs';
+      openBtn.textContent = 'Open ↗';
+      openBtn.addEventListener('click', () => {
+        void chrome.tabs.create({ url: job.url, active: true });
+      });
+      actions.appendChild(openBtn);
+    } else if (job.channelName) {
+      actions.textContent = job.channelName;
+    }
+
+    meta.append(pill, actions);
+    item.append(head, meta);
+    if (job.error) {
+      const errEl = document.createElement('div');
+      errEl.className = 'muted-small';
+      errEl.textContent = job.error;
+      item.appendChild(errEl);
+    }
+    list.appendChild(item);
+  }
+  syncQueueElapsedTimer();
+}
+
+async function loadQueue() {
+  try {
+    const res = await sendMessage<{ jobs?: QueueJob[] }>({ type: 'QUEUE_LIST' });
+    queueJobs = res.jobs ?? [];
+    renderQueueCard();
+  } catch {
+    // ignore
+  }
+}
+
+let activityLogs: ActivityLogEntry[] = [];
+
+function renderLogsDrawer() {
+  const badge = document.getElementById('logs-count-badge');
+  const list = document.getElementById('logs-list');
+  if (!badge || !list) return;
+
+  badge.textContent = String(activityLogs.length);
+  list.innerHTML = '';
+
+  if (activityLogs.length === 0) {
+    const p = document.createElement('p');
+    p.className = 'muted-small';
+    p.textContent = 'No activity yet. Analyze or queue a video to see timing and debug logs.';
+    list.appendChild(p);
+    return;
+  }
+
+  for (const entry of activityLogs) {
+    const row = document.createElement('div');
+    row.className = `log-row is-${entry.level}`;
+
+    const timeEl = document.createElement('span');
+    timeEl.className = 'log-time';
+    timeEl.textContent = formatLogTimestamp(entry.ts);
+
+    const scopeEl = document.createElement('span');
+    scopeEl.className = 'log-scope';
+    scopeEl.textContent = `[${entry.scope}]`;
+
+    const msgEl = document.createElement('span');
+    msgEl.className = 'log-msg';
+    msgEl.textContent = entry.videoId ? `${entry.message} (${entry.videoId})` : entry.message;
+
+    row.append(timeEl, scopeEl, msgEl);
+    list.appendChild(row);
+  }
+}
+
+async function loadLogs() {
+  try {
+    const res = await sendMessage<{ logs?: ActivityLogEntry[] }>({ type: 'LOGS_GET' });
+    activityLogs = res.logs ?? [];
+    renderLogsDrawer();
+  } catch {
+    // ignore
+  }
+}
+
 chrome.tabs.onActivated.addListener(() => void syncActiveYouTubeTab());
+chrome.windows?.onFocusChanged?.addListener(() => void syncActiveYouTubeTab());
+chrome.tabs.onCreated?.addListener(() => void refreshOpenYouTubeTabs());
+chrome.tabs.onRemoved?.addListener((tabId) => {
+  tabStateByTabId.delete(tabId);
+  void refreshOpenYouTubeTabs();
+});
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url || changeInfo.title || changeInfo.status === 'complete') {
+    void refreshOpenYouTubeTabs();
+  }
   if (tabId === activeTabId && (changeInfo.status === 'complete' || changeInfo.url)) {
     void syncActiveYouTubeTab();
   }
@@ -1560,7 +2440,8 @@ async function init() {
   const res = await sendMessage<{ settings: ExtensionSettings }>({ type: 'SETTINGS_GET' });
   settings = res.settings;
   renderSettingsTab();
-  await Promise.all([syncActiveYouTubeTab(), loadKb()]);
+  await Promise.all([syncActiveYouTubeTab(), loadKb(), loadQueue(), loadLogs()]);
+  await refreshOpenYouTubeTabs();
 }
 
 void init();

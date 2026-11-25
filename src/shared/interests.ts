@@ -75,7 +75,6 @@ function expandTerms(topic: string): string[] {
   if (!norm) return [];
   const terms = new Set<string>([norm]);
 
-  // Add singular/plural heuristic for simple phrases
   if (norm.endsWith('s') && norm.length > 4) {
     terms.add(norm.slice(0, -1));
   }
@@ -111,35 +110,66 @@ function findMatchingTopic(haystack: string, topics: string[]): string | null {
   return null;
 }
 
+export interface ChapterRelevanceEval {
+  relevance: ChapterRelevance;
+  reason?: string;
+  matchedTopic?: string;
+  matchedSource?: 'allow' | 'ignore' | 'care' | 'ai';
+}
+
 export function evaluateChapterRelevance(
   chapter: Chapter,
-  settings: Pick<ExtensionSettings, 'topicsIgnore' | 'topicsCare'>
-): { relevance: ChapterRelevance; reason?: string } {
+  settings: Pick<ExtensionSettings, 'topicsIgnore' | 'topicsCare'> & { topicsAllow?: string[] }
+): ChapterRelevanceEval {
   const haystack = buildChapterHaystack(chapter);
 
-  // User's local "Don't Care" topics always take priority so clicking 👎 works instantly
+  // 1. Explicit allow-list override lets the user un-ignore a single chapter
+  const matchedAllow = findMatchingTopic(haystack, settings.topicsAllow ?? []);
+  if (matchedAllow) {
+    const matchedCare = findMatchingTopic(haystack, settings.topicsCare ?? []);
+    if (matchedCare) {
+      return {
+        relevance: 'must_watch',
+        reason: `Matches interest: ${matchedCare}`,
+        matchedTopic: matchedCare,
+        matchedSource: 'care',
+      };
+    }
+    return {
+      relevance: 'normal',
+      matchedTopic: matchedAllow,
+      matchedSource: 'allow',
+    };
+  }
+
+  // 2. User's "Don't Care" ignore topics
   const matchedIgnore = findMatchingTopic(haystack, settings.topicsIgnore ?? []);
   if (matchedIgnore) {
     return {
       relevance: 'skip',
       reason: `Ignored topic: ${matchedIgnore}`,
+      matchedTopic: matchedIgnore,
+      matchedSource: 'ignore',
     };
   }
 
-  // Next check explicit "Care About" topics
+  // 3. Explicit "Care About" topics
   const matchedCare = findMatchingTopic(haystack, settings.topicsCare ?? []);
   if (matchedCare) {
     return {
       relevance: 'must_watch',
       reason: `Matches interest: ${matchedCare}`,
+      matchedTopic: matchedCare,
+      matchedSource: 'care',
     };
   }
 
-  // Otherwise keep AI's judgment if present
+  // 4. Fallback to AI judgment
   if (chapter.relevance === 'skip' || chapter.relevance === 'must_watch') {
     return {
       relevance: chapter.relevance,
       reason: chapter.relevanceReason,
+      matchedSource: 'ai',
     };
   }
 
@@ -153,7 +183,6 @@ export function extractTopicFromChapter(chapter: Chapter): string {
   const tag = chapter.topicTags?.find((t) => t.trim().length >= 2);
   if (tag) return tag.trim();
 
-  // Strip common punctuation/fillers for a clean reusable topic phrase
   const cleaned = chapter.title
     .replace(/\([^)]*\)/g, '')
     .replace(/^(intro|summary|update|news|more on|implications?:)\s*/i, '')
@@ -174,4 +203,86 @@ export function addUniqueTopic(list: string[], topic: string): string[] {
 export function removeTopic(list: string[], topic: string): string[] {
   const lower = topic.trim().toLowerCase();
   return list.filter((item) => item.trim().toLowerCase() !== lower);
+}
+
+export function toggleChapterIgnore(
+  chapter: Chapter,
+  settings: Pick<ExtensionSettings, 'topicsIgnore' | 'topicsCare'> & { topicsAllow?: string[] }
+): {
+  action: 'ignored' | 'unignored';
+  topic: string;
+  topicsIgnore: string[];
+  topicsCare: string[];
+  topicsAllow: string[];
+} {
+  const evalRes = evaluateChapterRelevance(chapter, settings);
+  const extracted = extractTopicFromChapter(chapter);
+  const allowList = settings.topicsAllow ?? [];
+
+  if (evalRes.relevance === 'skip') {
+    let nextIgnore = [...settings.topicsIgnore];
+    let nextAllow = [...allowList];
+
+    // If the matched ignore topic is specific to this chapter (not a broad preset), remove it;
+    // otherwise keep broad category rules intact and allow-override this chapter.
+    if (
+      evalRes.matchedTopic &&
+      (evalRes.matchedTopic.toLowerCase() === extracted.toLowerCase() ||
+        chapter.title.toLowerCase().includes(evalRes.matchedTopic.toLowerCase()))
+    ) {
+      nextIgnore = removeTopic(nextIgnore, evalRes.matchedTopic);
+    } else {
+      nextAllow = addUniqueTopic(nextAllow, extracted);
+    }
+
+    return {
+      action: 'unignored',
+      topic: evalRes.matchedTopic || extracted,
+      topicsIgnore: nextIgnore,
+      topicsCare: [...settings.topicsCare],
+      topicsAllow: nextAllow,
+    };
+  }
+
+  return {
+    action: 'ignored',
+    topic: extracted,
+    topicsIgnore: addUniqueTopic(settings.topicsIgnore, extracted),
+    topicsCare: removeTopic(settings.topicsCare, extracted),
+    topicsAllow: removeTopic(allowList, extracted),
+  };
+}
+
+export function toggleChapterCare(
+  chapter: Chapter,
+  settings: Pick<ExtensionSettings, 'topicsIgnore' | 'topicsCare'> & { topicsAllow?: string[] }
+): {
+  action: 'cared' | 'cleared';
+  topic: string;
+  topicsCare: string[];
+  topicsIgnore: string[];
+  topicsAllow: string[];
+} {
+  const evalRes = evaluateChapterRelevance(chapter, settings);
+  const extracted = extractTopicFromChapter(chapter);
+  const allowList = settings.topicsAllow ?? [];
+
+  if (evalRes.relevance === 'must_watch') {
+    const target = evalRes.matchedTopic || extracted;
+    return {
+      action: 'cleared',
+      topic: target,
+      topicsCare: removeTopic(settings.topicsCare, target),
+      topicsIgnore: [...settings.topicsIgnore],
+      topicsAllow: [...allowList],
+    };
+  }
+
+  return {
+    action: 'cared',
+    topic: extracted,
+    topicsCare: addUniqueTopic(settings.topicsCare, extracted),
+    topicsIgnore: removeTopic(settings.topicsIgnore, extracted),
+    topicsAllow: addUniqueTopic(allowList, extracted),
+  };
 }

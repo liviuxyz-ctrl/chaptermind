@@ -114,6 +114,8 @@ export interface KnowledgeEntry {
   savedAt: number;
   updatedAt: number;
   aiProviderUsed: string;
+  category?: string;
+  trashedAt?: number;
   tldr: string;
   chapters: Chapter[];
   aiSponsors: SponsorSegment[];
@@ -147,6 +149,7 @@ export interface ExtensionSettings {
   chapterFilterMode: ChapterFilterMode;
   topicsIgnore: string[];
   topicsCare: string[];
+  topicsAllow: string[];
   autoSkipIgnoredChapters: boolean;
   hideIgnoredChapters: boolean;
   autoReturnAfterBridgeCapture: boolean;
@@ -155,6 +158,8 @@ export interface ExtensionSettings {
   githubFolder: string;
   githubToken: string;
   githubAutoPush: boolean;
+  kbCategories: string[];
+  trashRetentionDays: number;
 }
 
 export const DEFAULT_CATEGORY_RULES: Record<SponsorCategory, CategoryRule> = {
@@ -201,6 +206,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
     'reasoning models',
     'developer tools',
   ],
+  topicsAllow: [],
   autoSkipIgnoredChapters: true,
   hideIgnoredChapters: false,
   autoReturnAfterBridgeCapture: true,
@@ -209,6 +215,8 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   githubFolder: 'knowledge-base',
   githubToken: '',
   githubAutoPush: false,
+  kbCategories: ['Work', 'AI & Tech', 'Learning', 'Personal'],
+  trashRetentionDays: 30,
 };
 
 export interface BridgeTask {
@@ -282,8 +290,8 @@ export type RuntimeMessage =
       sponsorSegments: SponsorSegment[];
       providerLabel?: string;
     }
-  | { type: 'GET_BRIDGE_TASK' }
-  | { type: 'CLEAR_BRIDGE_TASK' }
+  | { type: 'GET_BRIDGE_TASK'; provider?: SubscriptionProvider }
+  | { type: 'CLEAR_BRIDGE_TASK'; provider?: SubscriptionProvider }
   | { type: 'IMPORT_BRIDGE_RESPONSE'; taskId: string; rawText: string }
   | { type: 'ASK_KB_API'; question: string }
   | { type: 'TEST_API_CONNECTION'; settings?: ExtensionSettings }
@@ -291,6 +299,30 @@ export type RuntimeMessage =
   | { type: 'GITHUB_PUSH_ALL' }
   | { type: 'GITHUB_FETCH_ALL' }
   | { type: 'OPEN_SIDEPANEL' }
+  | { type: 'QUEUE_ADD'; urlOrId: string; title?: string; channelName?: string }
+  | {
+      type: 'QUEUE_ADD_BATCH';
+      items: Array<{ urlOrId: string; title?: string; channelName?: string }>;
+    }
+  | { type: 'QUEUE_ADD_OPEN_TABS'; onlyUnsaved?: boolean }
+  | { type: 'QUEUE_LIST' }
+  | { type: 'QUEUE_REMOVE'; videoId: string }
+  | { type: 'QUEUE_CLEAR_DONE' }
+  | {
+      type: 'HEADLESS_TRANSCRIPT_CAPTURED';
+      videoId: string;
+      meta: VideoMetadata | null;
+      transcript: TranscriptCue[];
+      youtubeChapters: Chapter[];
+      error?: string;
+    }
+  | { type: 'KB_IDS_GET' }
+  | { type: 'KB_SET_CATEGORY'; videoId: string; category: string }
+  | { type: 'KB_TRASH'; videoId: string }
+  | { type: 'KB_RESTORE'; videoId: string }
+  | { type: 'KB_EMPTY_TRASH' }
+  | { type: 'LOGS_GET' }
+  | { type: 'LOGS_CLEAR' }
   // Tab-targeted messages
   | { type: 'GET_ACTIVE_VIDEO_STATE' }
   | { type: 'SEEK_TO'; seconds: number }
@@ -300,5 +332,40 @@ export type RuntimeMessage =
   | { type: 'SETTINGS_UPDATED'; settings: ExtensionSettings }
   // Broadcast to side panel
   | { type: 'VIDEO_STATE_CHANGED'; state: ActiveVideoState }
+  | { type: 'ANALYSIS_COMPLETED'; entry: KnowledgeEntry }
   | { type: 'BRIDGE_KB_ANSWER_READY'; question: string; answer: string; entries: KnowledgeEntry[] }
-  | { type: 'BRIDGE_ANALYSIS_READY'; entry: KnowledgeEntry };
+  | { type: 'BRIDGE_ANALYSIS_READY'; entry: KnowledgeEntry }
+  | { type: 'QUEUE_UPDATED'; jobs: QueueJob[]; kbVideoIds?: string[] }
+  | { type: 'LOGS_UPDATED'; logs: ActivityLogEntry[] };
+
+export type LogLevel = 'info' | 'warn' | 'error' | 'success';
+export type LogScope = 'queue' | 'transcript' | 'ai' | 'github' | 'system';
+
+export interface ActivityLogEntry {
+  id: string;
+  ts: number;
+  level: LogLevel;
+  scope: LogScope;
+  message: string;
+  videoId?: string;
+}
+
+export type QueueJobStatus =
+  | 'queued'
+  | 'fetching_transcript'
+  | 'analyzing'
+  | 'done'
+  | 'error';
+
+export interface QueueJob {
+  videoId: string;
+  url: string;
+  title: string;
+  channelName?: string;
+  status: QueueJobStatus;
+  error?: string;
+  addedAt: number;
+  updatedAt: number;
+  chapterCount?: number;
+  entityCount?: number;
+}

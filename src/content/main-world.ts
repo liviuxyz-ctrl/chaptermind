@@ -1,6 +1,11 @@
 import type { CaptionTrackInfo, Chapter, TranscriptCue, VideoMetadata } from '../shared/types';
 import { parseDescriptionChapters } from '../shared/chapters';
-import { parseJson3Transcript, parseXmlTranscript } from '../shared/transcript';
+import {
+  computeTranscriptFingerprint,
+  isTranscriptFingerprintFromOtherVideo,
+  parseJson3Transcript,
+  parseXmlTranscript,
+} from '../shared/transcript';
 
 interface MoviePlayerElement extends HTMLElement {
   getPlayerResponse?: () => Record<string, unknown> | undefined;
@@ -32,6 +37,56 @@ function getVideoIdFromLocation(): string | null {
   return null;
 }
 
+let lastLocationVideoId: string | null = getVideoIdFromLocation();
+let domTranscriptOwnerVideoId: string | null = null;
+const seenTranscriptFingerprints = new Map<string, string>();
+
+function markCurrentDomTranscriptStaleIfOwnerChanged(nextVideoId: string | null) {
+  if (lastLocationVideoId && nextVideoId !== lastLocationVideoId) {
+    const existingFp = computeTranscriptFingerprint(readTranscriptFromDom());
+    if (existingFp && !seenTranscriptFingerprints.has(existingFp)) {
+      seenTranscriptFingerprints.set(existingFp, lastLocationVideoId);
+    }
+    if (domTranscriptOwnerVideoId && domTranscriptOwnerVideoId !== nextVideoId) {
+      domTranscriptOwnerVideoId = null;
+    }
+  }
+  lastLocationVideoId = nextVideoId;
+}
+
+function extractBalancedJsonAfter(text: string, marker: string): Record<string, unknown> | null {
+  const idx = text.indexOf(marker);
+  if (idx === -1) return null;
+  const start = text.indexOf('{', idx + marker.length);
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1)) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function getPlayerResponse(): Record<string, unknown> | null {
   const player = document.getElementById('movie_player') as MoviePlayerElement | null;
   if (player && typeof player.getPlayerResponse === 'function') {
@@ -46,9 +101,23 @@ function getPlayerResponse(): Record<string, unknown> | null {
   return null;
 }
 
-function extractChaptersFromYtInitialData(durationSec: number): Chapter[] {
-  const win = window as unknown as { ytInitialData?: unknown };
-  const root = win.ytInitialData;
+function extractChaptersFromYtInitialData(durationSec: number, expectedVideoId: string): Chapter[] {
+  const flexy = document.querySelector('ytd-watch-flexy') as {
+    data?: unknown;
+    getAttribute?: (name: string) => string | null;
+  } | null;
+  const flexyVideoId = flexy?.getAttribute?.('video-id') ?? null;
+  const flexyData = flexyVideoId === expectedVideoId ? flexy?.data : undefined;
+
+  const win = window as unknown as {
+    ytInitialData?: {
+      currentVideoEndpoint?: { watchEndpoint?: { videoId?: string } };
+    };
+  };
+  const winDataVideoId = win.ytInitialData?.currentVideoEndpoint?.watchEndpoint?.videoId;
+  const winData = winDataVideoId === expectedVideoId ? win.ytInitialData : undefined;
+
+  const root = flexyData ?? winData;
   if (!root || typeof root !== 'object') return [];
 
   const found: Array<{ title: string; startTime: number }> = [];
@@ -173,9 +242,16 @@ function collectVideoPayload(): {
   const player = document.getElementById('movie_player') as MoviePlayerElement | null;
   const playerData = player?.getVideoData?.();
 
-  // Only accept playerResponse if it matches the current URL videoId
+  // Only accept playerResponse / playerData / flexy DOM if they strictly match the URL videoId
   const respVideoId = typeof videoDetails.videoId === 'string' ? videoDetails.videoId : null;
-  const matchesCurrent = !respVideoId || respVideoId === videoId;
+  const matchesCurrent = respVideoId === videoId;
+  const playerMatches = playerData?.video_id === videoId;
+  const flexyMatches =
+    document.querySelector('ytd-watch-flexy')?.getAttribute('video-id') === videoId;
+
+  if (!matchesCurrent && !playerMatches && !flexyMatches) {
+    return { meta: null, youtubeChapters: [], captionTracks: [] };
+  }
 
   const titleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, h1.title yt-formatted-string');
   const channelEl = document.querySelector('#owner #channel-name a, ytd-channel-name a');
@@ -183,21 +259,24 @@ function collectVideoPayload(): {
 
   const title =
     (matchesCurrent && typeof videoDetails.title === 'string' ? videoDetails.title : '') ||
-    playerData?.title ||
-    titleEl?.textContent?.trim() ||
+    (playerMatches ? playerData?.title : '') ||
+    (flexyMatches ? titleEl?.textContent?.trim() : '') ||
     document.title.replace(/\s*-\s*YouTube$/, '').trim();
 
   const channelName =
     (matchesCurrent && typeof videoDetails.author === 'string' ? videoDetails.author : '') ||
-    playerData?.author ||
-    channelEl?.textContent?.trim() ||
+    (playerMatches ? playerData?.author : '') ||
+    (flexyMatches ? channelEl?.textContent?.trim() : '') ||
     'Unknown Channel';
 
-  const channelUrl = (channelEl as HTMLAnchorElement | null)?.href || '';
+  const channelUrl = flexyMatches ? (channelEl as HTMLAnchorElement | null)?.href || '' : '';
   const durationFromResp =
     matchesCurrent && videoDetails.lengthSeconds ? Number(videoDetails.lengthSeconds) : 0;
-  const durationFromPlayer = player?.getDuration?.() ?? 0;
-  const durationFromVideo = videoEl && Number.isFinite(videoEl.duration) ? videoEl.duration : 0;
+  const durationFromPlayer = playerMatches || flexyMatches ? (player?.getDuration?.() ?? 0) : 0;
+  const durationFromVideo =
+    (matchesCurrent || playerMatches || flexyMatches) && videoEl && Number.isFinite(videoEl.duration)
+      ? videoEl.duration
+      : 0;
   const durationSec = Math.max(
     0,
     Math.round(durationFromResp || durationFromPlayer || durationFromVideo || 0)
@@ -209,7 +288,12 @@ function collectVideoPayload(): {
       : '';
 
   const descChapters = parseDescriptionChapters(description, durationSec);
-  const nativeChapters = descChapters.length > 0 ? descChapters : extractChaptersFromYtInitialData(durationSec);
+  const nativeChapters =
+    descChapters.length > 0
+      ? descChapters
+      : matchesCurrent || flexyMatches
+        ? extractChaptersFromYtInitialData(durationSec, videoId)
+        : [];
   const captionTracks = matchesCurrent ? extractCaptionTracks(playerResponse) : [];
 
   return {
@@ -293,9 +377,32 @@ function waitMs(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function fetchTranscriptViaYouTubePanel(): Promise<TranscriptCue[]> {
+async function fetchTranscriptViaYouTubePanel(
+  requestedVideoId: string,
+  forceRefresh = false
+): Promise<TranscriptCue[]> {
+  if (getVideoIdFromLocation() !== requestedVideoId) return [];
+
+  // Wait for YouTube watch-flexy to bind the requested videoId before touching the transcript panel
+  for (let i = 0; i < 20; i++) {
+    if (getVideoIdFromLocation() !== requestedVideoId) return [];
+    const flexyId = document.querySelector('ytd-watch-flexy')?.getAttribute('video-id');
+    if (flexyId === requestedVideoId) break;
+    await waitMs(250);
+  }
+  if (getVideoIdFromLocation() !== requestedVideoId) return [];
+
   const existing = readTranscriptFromDom();
-  if (existing.length > 0) return existing;
+  const existingFp = computeTranscriptFingerprint(existing);
+  if (
+    !forceRefresh &&
+    domTranscriptOwnerVideoId === requestedVideoId &&
+    !isTranscriptFingerprintFromOtherVideo(existingFp, requestedVideoId, seenTranscriptFingerprints)
+  ) {
+    return existing;
+  }
+
+  const staleDomFp = domTranscriptOwnerVideoId !== requestedVideoId ? existingFp : undefined;
 
   const panel = document.querySelector(
     'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]'
@@ -303,11 +410,20 @@ async function fetchTranscriptViaYouTubePanel(): Promise<TranscriptCue[]> {
   const wasExpanded =
     panel?.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED';
 
+  if (wasExpanded && (staleDomFp || forceRefresh)) {
+    const closeBtn = document.querySelector(
+      'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"] #visibility-button button'
+    ) as HTMLElement | null;
+    closeBtn?.click();
+    await waitMs(250);
+  }
+
   let transcriptBtn: HTMLElement | null = null;
   let clickedExpand = false;
 
   // Wait for YouTube's watch metadata / description expander to hydrate
   for (let i = 0; i < 16; i++) {
+    if (getVideoIdFromLocation() !== requestedVideoId) return [];
     transcriptBtn = document.querySelector(
       'ytd-video-description-transcript-section-renderer button'
     ) as HTMLElement | null;
@@ -325,16 +441,27 @@ async function fetchTranscriptViaYouTubePanel(): Promise<TranscriptCue[]> {
     await waitMs(300);
   }
 
-  if (!transcriptBtn) {
+  if (!transcriptBtn || getVideoIdFromLocation() !== requestedVideoId) {
     return [];
   }
 
   transcriptBtn.click();
 
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let attempt = 0; attempt < 28; attempt++) {
     await waitMs(250);
+    if (getVideoIdFromLocation() !== requestedVideoId) return [];
     const cues = readTranscriptFromDom();
-    if (cues.length > 0) {
+    const fp = computeTranscriptFingerprint(cues);
+    if (
+      !isTranscriptFingerprintFromOtherVideo(
+        fp,
+        requestedVideoId,
+        seenTranscriptFingerprints,
+        staleDomFp
+      )
+    ) {
+      domTranscriptOwnerVideoId = requestedVideoId;
+      seenTranscriptFingerprints.set(fp, requestedVideoId);
       if (!wasExpanded) {
         const closeBtn = document.querySelector(
           'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"] #visibility-button button'
@@ -348,17 +475,37 @@ async function fetchTranscriptViaYouTubePanel(): Promise<TranscriptCue[]> {
   return [];
 }
 
-async function fetchTranscriptForVideo(requestedVideoId: string): Promise<{
+async function fetchTranscriptForVideo(
+  requestedVideoId: string,
+  forceRefresh = false
+): Promise<{
   videoId: string;
   cues: TranscriptCue[];
   error?: string;
 }> {
-  const immediateDom = readTranscriptFromDom();
-  if (immediateDom.length > 0) {
-    return { videoId: requestedVideoId, cues: immediateDom };
+  markCurrentDomTranscriptStaleIfOwnerChanged(requestedVideoId);
+  if (getVideoIdFromLocation() !== requestedVideoId) {
+    return { videoId: requestedVideoId, cues: [] };
+  }
+
+  if (!forceRefresh && domTranscriptOwnerVideoId === requestedVideoId) {
+    const ownedDom = readTranscriptFromDom();
+    const ownedFp = computeTranscriptFingerprint(ownedDom);
+    if (
+      !isTranscriptFingerprintFromOtherVideo(ownedFp, requestedVideoId, seenTranscriptFingerprints)
+    ) {
+      return { videoId: requestedVideoId, cues: ownedDom };
+    }
   }
 
   let payload = collectVideoPayload();
+  for (let w = 0; w < 10 && !payload.meta; w++) {
+    await waitMs(200);
+    if (getVideoIdFromLocation() !== requestedVideoId) {
+      return { videoId: requestedVideoId, cues: [] };
+    }
+    payload = collectVideoPayload();
+  }
 
   // If SPA just navigated and playerResponse hasn't updated yet, fetch watch HTML as fallback
   if (payload.captionTracks.length === 0 && requestedVideoId) {
@@ -367,9 +514,9 @@ async function fetchTranscriptForVideo(requestedVideoId: string): Promise<{
         credentials: 'include',
       });
       const html = await htmlRes.text();
-      const match = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var\s|let\s|const\s|<\/script)/s);
-      if (match?.[1]) {
-        const parsed = JSON.parse(match[1]) as Record<string, unknown>;
+      const parsed = extractBalancedJsonAfter(html, 'ytInitialPlayerResponse =');
+      const vd = parsed?.videoDetails as { videoId?: string } | undefined;
+      if (parsed && (!vd?.videoId || vd.videoId === requestedVideoId)) {
         const tracks = extractCaptionTracks(parsed);
         if (tracks.length > 0) {
           payload = { ...payload, captionTracks: tracks };
@@ -378,6 +525,10 @@ async function fetchTranscriptForVideo(requestedVideoId: string): Promise<{
     } catch {
       // ignore fallback HTML fetch errors
     }
+  }
+
+  if (getVideoIdFromLocation() !== requestedVideoId) {
+    return { videoId: requestedVideoId, cues: [] };
   }
 
   const track = pickBestTrack(payload.captionTracks);
@@ -394,7 +545,15 @@ async function fetchTranscriptForVideo(requestedVideoId: string): Promise<{
         const raw = await res.text();
         if (raw.trim().startsWith('{')) {
           const parsed = parseJson3Transcript(JSON.parse(raw));
-          if (parsed.length > 0) {
+          if (getVideoIdFromLocation() !== requestedVideoId) {
+            return { videoId: requestedVideoId, cues: [] };
+          }
+          const fp = computeTranscriptFingerprint(parsed);
+          if (
+            parsed.length > 0 &&
+            !isTranscriptFingerprintFromOtherVideo(fp, requestedVideoId, seenTranscriptFingerprints)
+          ) {
+            seenTranscriptFingerprints.set(fp, requestedVideoId);
             return { videoId: requestedVideoId, cues: parsed };
           }
         }
@@ -409,7 +568,15 @@ async function fetchTranscriptForVideo(requestedVideoId: string): Promise<{
       if (res.ok) {
         const xml = await res.text();
         const parsed = parseXmlTranscript(xml);
-        if (parsed.length > 0) {
+        if (getVideoIdFromLocation() !== requestedVideoId) {
+          return { videoId: requestedVideoId, cues: [] };
+        }
+        const fp = computeTranscriptFingerprint(parsed);
+        if (
+          parsed.length > 0 &&
+          !isTranscriptFingerprintFromOtherVideo(fp, requestedVideoId, seenTranscriptFingerprints)
+        ) {
+          seenTranscriptFingerprints.set(fp, requestedVideoId);
           return { videoId: requestedVideoId, cues: parsed };
         }
       }
@@ -419,7 +586,10 @@ async function fetchTranscriptForVideo(requestedVideoId: string): Promise<{
   }
 
   // Fallback to YouTube's native transcript drawer (handles PoToken / exp=xpe tracks)
-  const panelCues = await fetchTranscriptViaYouTubePanel();
+  const panelCues = await fetchTranscriptViaYouTubePanel(requestedVideoId, forceRefresh);
+  if (getVideoIdFromLocation() !== requestedVideoId) {
+    return { videoId: requestedVideoId, cues: [] };
+  }
   if (panelCues.length > 0) {
     return { videoId: requestedVideoId, cues: panelCues };
   }
@@ -433,8 +603,24 @@ async function fetchTranscriptForVideo(requestedVideoId: string): Promise<{
   };
 }
 
-function postVideoData() {
+let postVideoRetryTimer: number | null = null;
+
+function postVideoData(attempt = 0) {
+  const videoId = getVideoIdFromLocation();
+  markCurrentDomTranscriptStaleIfOwnerChanged(videoId);
+
   const payload = collectVideoPayload();
+  if (videoId && !payload.meta && attempt < 12) {
+    if (postVideoRetryTimer !== null) window.clearTimeout(postVideoRetryTimer);
+    postVideoRetryTimer = window.setTimeout(() => {
+      postVideoRetryTimer = null;
+      if (getVideoIdFromLocation() === videoId) {
+        postVideoData(attempt + 1);
+      }
+    }, 300);
+    return;
+  }
+
   window.postMessage(
     {
       source: 'chaptermind-main',
@@ -451,14 +637,15 @@ window.addEventListener('message', (event) => {
     source?: string;
     type?: string;
     videoId?: string;
+    forceRefresh?: boolean;
     seconds?: number;
   } | null;
   if (!data || data.source !== 'chaptermind-isolated') return;
 
   if (data.type === 'CHAPTERMIND_REQUEST_VIDEO_DATA') {
-    postVideoData();
+    postVideoData(0);
   } else if (data.type === 'CHAPTERMIND_FETCH_TRANSCRIPT' && data.videoId) {
-    void fetchTranscriptForVideo(data.videoId).then((result) => {
+    void fetchTranscriptForVideo(data.videoId, Boolean(data.forceRefresh)).then((result) => {
       window.postMessage(
         {
           source: 'chaptermind-main',
@@ -483,9 +670,12 @@ window.addEventListener('message', (event) => {
   }
 });
 
+window.addEventListener('yt-navigate-start', () => {
+  markCurrentDomTranscriptStaleIfOwnerChanged(null);
+});
 window.addEventListener('yt-navigate-finish', () => {
-  setTimeout(postVideoData, 300);
+  setTimeout(() => postVideoData(0), 300);
 });
 window.addEventListener('yt-page-data-updated', () => {
-  setTimeout(postVideoData, 300);
+  setTimeout(() => postVideoData(0), 300);
 });
