@@ -2113,17 +2113,48 @@ chrome.runtime.onMessage.addListener((msg: RuntimeMessage, sender) => {
 });
 
 let queueJobs: QueueJob[] = [];
+let queueElapsedTimer: number | null = null;
 
-function formatQueueStatusLabel(job: QueueJob): { label: string; cls: string } {
-  if (job.status === 'queued') return { label: 'Queued', cls: 'is-running' };
-  if (job.status === 'fetching_transcript') return { label: 'Extracting captions…', cls: 'is-running' };
-  if (job.status === 'analyzing') return { label: 'Analyzing AI…', cls: 'is-running' };
+function formatActiveQueueText(status: QueueJob['status'], sinceMs: number): string {
+  const sec = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000));
+  const suffix = sec >= 1 ? ` ${sec}s` : '';
+  if (status === 'queued') return `Queued${suffix}`;
+  if (status === 'fetching_transcript') return `Extracting captions…${suffix}`;
+  if (status === 'analyzing') return `Analyzing AI…${suffix}`;
+  return '';
+}
+
+function formatQueueStatusLabel(job: QueueJob): { label: string; cls: string; activeSince?: number } {
+  const since = job.updatedAt || job.addedAt || Date.now();
+  if (job.status === 'queued' || job.status === 'fetching_transcript' || job.status === 'analyzing') {
+    return { label: formatActiveQueueText(job.status, since), cls: 'is-running', activeSince: since };
+  }
   if (job.status === 'done') {
     const ch = job.chapterCount ?? 0;
     const ent = job.entityCount ?? 0;
     return { label: `✓ ${ch} ch · ${ent} ent`, cls: 'is-done' };
   }
   return { label: 'Failed', cls: 'is-error' };
+}
+
+function syncQueueElapsedTimer() {
+  const hasRunning = queueJobs.some(
+    (j) => j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing'
+  );
+  if (hasRunning && queueElapsedTimer === null) {
+    queueElapsedTimer = window.setInterval(() => {
+      document.querySelectorAll<HTMLElement>('.queue-badge[data-queue-since]').forEach((el) => {
+        const st = el.dataset.queueStatus as QueueJob['status'] | undefined;
+        const since = Number(el.dataset.queueSince);
+        if (st && Number.isFinite(since)) {
+          el.textContent = formatActiveQueueText(st, since);
+        }
+      });
+    }, 1000);
+  } else if (!hasRunning && queueElapsedTimer !== null) {
+    window.clearInterval(queueElapsedTimer);
+    queueElapsedTimer = null;
+  }
 }
 
 function renderQueueCard() {
@@ -2136,6 +2167,7 @@ function renderQueueCard() {
     card.classList.add('hidden');
     badge.textContent = '0';
     list.innerHTML = '';
+    syncQueueElapsedTimer();
     return;
   }
 
@@ -2209,6 +2241,10 @@ function renderQueueCard() {
     const pill = document.createElement('span');
     pill.className = `queue-badge ${statusInfo.cls}`;
     pill.textContent = statusInfo.label;
+    if (statusInfo.activeSince) {
+      pill.dataset.queueStatus = job.status;
+      pill.dataset.queueSince = String(statusInfo.activeSince);
+    }
     if (job.error) pill.title = job.error;
 
     const actions = document.createElement('span');
@@ -2252,6 +2288,7 @@ function renderQueueCard() {
     }
     list.appendChild(item);
   }
+  syncQueueElapsedTimer();
 }
 
 async function loadQueue() {

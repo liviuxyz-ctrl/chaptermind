@@ -1202,6 +1202,11 @@ textarea:focus,
   display: none;
 }
 
+.kb-cat-bar .chip {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .chip-trash {
   flex-shrink: 0;
 }

@@ -717,19 +717,25 @@ async function handleMessage(
         pending.reject(new Error('Cancelled by user.'));
       }
       inFlightQueueVideoIds.delete(msg.videoId);
-      const jobs = (await loadQueueJobs()).filter((j) => j.videoId !== msg.videoId);
-      await saveQueueJobs(jobs);
-      await broadcastQueueUpdated(jobs);
+      syncQueueKeepalive();
+      const { next: jobs } = await mutateQueueJobs((curr) => ({
+        next: curr.filter((j) => j.videoId !== msg.videoId),
+        changed: true,
+      }));
       void processHeadlessQueue();
       return { ok: true, jobs };
     }
 
     case 'QUEUE_CLEAR_DONE': {
-      const jobs = (await loadQueueJobs()).filter(
-        (j) => j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing'
-      );
-      await saveQueueJobs(jobs);
-      await broadcastQueueUpdated(jobs);
+      const { next: jobs } = await mutateQueueJobs((curr) => ({
+        next: curr.filter(
+          (j) =>
+            j.status === 'queued' ||
+            j.status === 'fetching_transcript' ||
+            j.status === 'analyzing'
+        ),
+        changed: true,
+      }));
       return { ok: true, jobs };
     }
 
@@ -770,6 +776,23 @@ const pendingHeadlessCaptures = new Map<
 
 const MAX_CONCURRENT_QUEUE_JOBS = 2;
 const inFlightQueueVideoIds = new Set<string>();
+let queueStorageChain: Promise<void> = Promise.resolve();
+let queueKeepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+function syncQueueKeepalive() {
+  if (inFlightQueueVideoIds.size > 0) {
+    if (queueKeepaliveTimer === null) {
+      queueKeepaliveTimer = setInterval(() => {
+        chrome.runtime?.getPlatformInfo?.(() => {
+          void chrome.runtime.lastError;
+        });
+      }, 20_000);
+    }
+  } else if (queueKeepaliveTimer !== null) {
+    clearInterval(queueKeepaliveTimer);
+    queueKeepaliveTimer = null;
+  }
+}
 
 async function loadQueueJobs(): Promise<QueueJob[]> {
   try {
@@ -783,6 +806,25 @@ async function loadQueueJobs(): Promise<QueueJob[]> {
 
 async function saveQueueJobs(jobs: QueueJob[]): Promise<void> {
   await chrome.storage.local.set({ [QUEUE_JOBS_KEY]: jobs });
+}
+
+function mutateQueueJobs<T = undefined>(
+  mutator: (jobs: QueueJob[]) => { next: QueueJob[]; changed?: boolean; result?: T }
+): Promise<{ next: QueueJob[]; result: T | undefined }> {
+  const run = queueStorageChain.then(async () => {
+    const current = await loadQueueJobs();
+    const { next, changed = true, result } = mutator(current);
+    if (changed) {
+      await saveQueueJobs(next);
+      await broadcastQueueUpdated(next);
+    }
+    return { next, result };
+  });
+  queueStorageChain = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
 }
 
 async function broadcastQueueUpdated(jobs?: QueueJob[]): Promise<void> {
@@ -952,24 +994,22 @@ async function captureViaHeadlessTab(videoId: string): Promise<HeadlessCaptureRe
 }
 
 async function recoverStaleQueueJobs(): Promise<QueueJob[]> {
-  const jobs = await loadQueueJobs();
   const now = Date.now();
-  let changed = false;
-  const next = jobs.map((job) => {
-    const isRunning = job.status === 'fetching_transcript' || job.status === 'analyzing';
-    if (!isRunning) return job;
-    const notRunningInWorker = !inFlightQueueVideoIds.has(job.videoId);
-    const staleTimeout = now - (job.updatedAt || job.addedAt) > 90_000;
-    if (notRunningInWorker || staleTimeout) {
-      changed = true;
-      return { ...job, status: 'queued' as const, error: undefined, updatedAt: now };
-    }
-    return job;
+  const { next } = await mutateQueueJobs((jobs) => {
+    let changed = false;
+    const updated = jobs.map((job) => {
+      const isRunning = job.status === 'fetching_transcript' || job.status === 'analyzing';
+      if (!isRunning) return job;
+      const notRunningInWorker = !inFlightQueueVideoIds.has(job.videoId);
+      const staleTimeout = now - (job.updatedAt || job.addedAt) > 90_000;
+      if (notRunningInWorker || staleTimeout) {
+        changed = true;
+        return { ...job, status: 'queued' as const, error: undefined, updatedAt: now };
+      }
+      return job;
+    });
+    return { next: updated, changed };
   });
-  if (changed) {
-    await saveQueueJobs(next);
-    await broadcastQueueUpdated(next);
-  }
   return next;
 }
 
@@ -977,12 +1017,12 @@ async function updateQueueJob(
   videoId: string,
   patch: Partial<QueueJob>
 ): Promise<QueueJob[]> {
-  const jobs = await loadQueueJobs();
-  const next = jobs.map((j) =>
-    j.videoId === videoId ? { ...j, ...patch, updatedAt: Date.now() } : j
-  );
-  await saveQueueJobs(next);
-  await broadcastQueueUpdated(next);
+  const { next } = await mutateQueueJobs((jobs) => ({
+    next: jobs.map((j) =>
+      j.videoId === videoId ? { ...j, ...patch, updatedAt: Date.now() } : j
+    ),
+    changed: true,
+  }));
   return next;
 }
 
@@ -1020,45 +1060,46 @@ async function enqueueHeadlessBatch(
   items: Array<{ urlOrId: string; title?: string; channelName?: string }>
 ): Promise<QueueJob[]> {
   if (items.length === 0) return [];
-  const jobs = await loadQueueJobs();
-  let working = [...jobs];
-  const addedOrActive: QueueJob[] = [];
+  const { result: addedOrActive } = await mutateQueueJobs<QueueJob[]>((jobs) => {
+    let working = [...jobs];
+    const added: QueueJob[] = [];
 
-  for (const item of items) {
-    const clean = item.urlOrId.trim();
-    const videoId = /^[A-Za-z0-9_-]{11}$/.test(clean) ? clean : extractYouTubeVideoId(clean);
-    if (!videoId) continue;
+    for (const item of items) {
+      const clean = item.urlOrId.trim();
+      const videoId = /^[A-Za-z0-9_-]{11}$/.test(clean) ? clean : extractYouTubeVideoId(clean);
+      if (!videoId) continue;
 
-    const activeExisting = working.find(
-      (j) =>
-        j.videoId === videoId &&
-        (j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing')
-    );
-    if (activeExisting) {
-      addedOrActive.push(activeExisting);
-      continue;
+      const activeExisting = working.find(
+        (j) =>
+          j.videoId === videoId &&
+          (j.status === 'queued' || j.status === 'fetching_transcript' || j.status === 'analyzing')
+      );
+      if (activeExisting) {
+        added.push(activeExisting);
+        continue;
+      }
+
+      const now = Date.now();
+      const job: QueueJob = {
+        videoId,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+        title: item.title?.trim() || `YouTube Video (${videoId})`,
+        channelName: item.channelName,
+        status: 'queued',
+        addedAt: now,
+        updatedAt: now,
+      };
+      working = [job, ...working.filter((j) => j.videoId !== videoId)].slice(0, 30);
+      added.push(job);
     }
 
-    const now = Date.now();
-    const job: QueueJob = {
-      videoId,
-      url: `https://www.youtube.com/watch?v=${videoId}`,
-      title: item.title?.trim() || `YouTube Video (${videoId})`,
-      channelName: item.channelName,
-      status: 'queued',
-      addedAt: now,
-      updatedAt: now,
-    };
-    working = [job, ...working.filter((j) => j.videoId !== videoId)].slice(0, 30);
-    addedOrActive.push(job);
-  }
+    return { next: working, changed: added.length > 0, result: added };
+  });
 
-  if (addedOrActive.length > 0) {
-    await saveQueueJobs(working);
-    await broadcastQueueUpdated(working);
+  if ((addedOrActive?.length ?? 0) > 0) {
     void processHeadlessQueue();
   }
-  return addedOrActive;
+  return addedOrActive ?? [];
 }
 
 async function enqueueHeadlessJob(
@@ -1138,9 +1179,6 @@ async function runSingleHeadlessJob(videoId: string): Promise<void> {
     await putEntry(entry);
     await pushAnalysisToYouTubeTabs(entry);
     chrome.runtime.sendMessage({ type: 'ANALYSIS_COMPLETED', entry }).catch(() => {});
-    await maybeAutoPushGithub(settings).catch((err) => {
-      console.warn('ChapterMind auto-push skipped:', err);
-    });
 
     await updateQueueJob(videoId, {
       status: 'done',
@@ -1149,6 +1187,10 @@ async function runSingleHeadlessJob(videoId: string): Promise<void> {
       chapterCount: entry.chapters.length,
       entityCount: entry.entities.length,
       error: undefined,
+    });
+
+    void maybeAutoPushGithub(settings).catch((err) => {
+      console.warn('ChapterMind auto-push skipped:', err);
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1167,8 +1209,10 @@ async function processHeadlessQueue(): Promise<void> {
   for (const job of candidates) {
     if (inFlightQueueVideoIds.size >= MAX_CONCURRENT_QUEUE_JOBS) break;
     inFlightQueueVideoIds.add(job.videoId);
+    syncQueueKeepalive();
     void runSingleHeadlessJob(job.videoId).finally(() => {
       inFlightQueueVideoIds.delete(job.videoId);
+      syncQueueKeepalive();
       void processHeadlessQueue();
     });
   }
