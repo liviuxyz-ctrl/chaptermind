@@ -1289,31 +1289,41 @@ function ensureThumbQueueStyles() {
   const style = document.createElement('style');
   style.id = 'cm-thumb-btn-style';
   style.textContent = `
+    .cm-menu-host {
+      display: inline-flex !important;
+      flex-direction: column !important;
+      align-items: flex-end !important;
+      gap: 4px !important;
+      height: auto !important;
+      overflow: visible !important;
+      flex-shrink: 0 !important;
+      pointer-events: auto !important;
+      z-index: 30 !important;
+    }
     .cm-thumb-queue-btn {
-      position: absolute;
-      top: 8px;
-      left: 8px;
-      z-index: 25;
+      position: relative;
+      z-index: 30;
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      padding: 3px 7px;
+      justify-content: center;
+      gap: 3px;
+      padding: 2px 6px;
       border-radius: 6px;
       border: 1px solid rgba(255, 255, 255, 0.16);
-      background: rgba(9, 9, 11, 0.84);
-      backdrop-filter: blur(6px);
+      background: rgba(24, 24, 27, 0.92);
       color: #e4e4e7;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 11px;
+      font-size: 10.5px;
       font-weight: 600;
-      line-height: 1.2;
+      line-height: 1.25;
+      white-space: nowrap;
+      flex-shrink: 0;
+      pointer-events: auto;
       cursor: pointer;
-      opacity: 0.9;
-      transition: opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+      transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
     }
     .cm-thumb-queue-btn:hover {
-      opacity: 1;
-      background: rgba(24, 24, 27, 0.96);
+      background: rgba(39, 39, 42, 0.98);
       border-color: rgba(56, 189, 248, 0.65);
       color: #ffffff;
     }
@@ -1377,30 +1387,37 @@ function scanThumbnailQueueButtons() {
   if (IS_HEADLESS_TAB) return;
   ensureThumbQueueStyles();
 
-  const anchors = document.querySelectorAll<HTMLAnchorElement>(
-    'ytd-rich-item-renderer a#thumbnail[href], ytd-video-renderer a#thumbnail[href], ytd-compact-video-renderer a#thumbnail[href], ytd-grid-video-renderer a#thumbnail[href], ytd-playlist-video-renderer a#thumbnail[href], yt-lockup-view-model a.yt-lockup-view-model-wiz__content-image[href], yt-lockup-view-model a[href*="/watch"]:has(yt-thumbnail-view-model, yt-image, img)'
-  );
+  const cardSelector =
+    'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model';
+  const cards = document.querySelectorAll<HTMLElement>(cardSelector);
 
-  for (const anchor of anchors) {
-    if (anchor.querySelector('.cm-thumb-queue-btn')) continue;
-    if (anchor.closest('yt-lockup-metadata-view-model, #details, #meta')) continue;
-    if (!anchor.querySelector('img, yt-image, yt-thumbnail-view-model')) continue;
+  for (const card of cards) {
+    if (card.querySelector('.cm-thumb-queue-btn')) continue;
+    const parentCard = card.parentElement?.closest(cardSelector);
+    if (parentCard?.querySelector('.cm-thumb-queue-btn')) continue;
 
-    const vid = extractYouTubeVideoId(anchor.href);
+    const link = card.querySelector<HTMLAnchorElement>('a[href*="/watch"], a[href*="/shorts/"]');
+    if (!link) continue;
+    const vid = extractYouTubeVideoId(link.href);
     if (!vid) continue;
-    const rect = anchor.getBoundingClientRect();
-    if (rect.width > 0 && rect.width < 90) continue;
 
-    const card = anchor.closest(
-      'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model'
+    const menuHost =
+      card.querySelector<HTMLElement>(
+        '.yt-lockup-metadata-view-model__menu-button, .yt-lockup-metadata-view-model-wiz__menu-button'
+      ) ??
+      card.querySelector<HTMLElement>('#menu') ??
+      card.querySelector<HTMLElement>('ytd-menu-renderer')?.parentElement ??
+      card.querySelector<HTMLElement>('yt-lockup-metadata-view-model, #details, #meta');
+
+    if (!menuHost || menuHost.closest('a')) continue;
+    if (menuHost.querySelector('.cm-thumb-queue-btn')) continue;
+
+    const titleEl = card.querySelector(
+      '#video-title, h3 a, .yt-lockup-metadata-view-model__title, .yt-lockup-metadata-view-model-wiz__title'
     );
-    if (card?.querySelector('.cm-thumb-queue-btn')) continue;
-
-    if (getComputedStyle(anchor).position === 'static') {
-      anchor.style.position = 'relative';
-    }
-    const titleEl = card?.querySelector('#video-title, h3 a, .yt-lockup-metadata-view-model-wiz__title');
-    const channelEl = card?.querySelector('ytd-channel-name #text, #channel-name a');
+    const channelEl = card.querySelector(
+      'ytd-channel-name #text, #channel-name a, .yt-content-metadata-view-model__metadata-row span'
+    );
     const title = titleEl?.textContent?.trim() || `YouTube Video (${vid})`;
     const channelName = channelEl?.textContent?.trim() || undefined;
 
@@ -1410,9 +1427,15 @@ function scanThumbnailQueueButtons() {
     btn.dataset.cmVid = vid;
     applyThumbButtonState(btn, vid);
 
-    btn.addEventListener('click', (e) => {
+    const stopBubble = (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
+    };
+    btn.addEventListener('pointerdown', stopBubble);
+    btn.addEventListener('mousedown', stopBubble);
+    btn.addEventListener('click', (e) => {
+      stopBubble(e);
       queueJobsById.set(vid, {
         videoId: vid,
         url: `https://www.youtube.com/watch?v=${vid}`,
@@ -1431,7 +1454,8 @@ function scanThumbnailQueueButtons() {
       }).catch(() => {});
     });
 
-    anchor.appendChild(btn);
+    menuHost.classList.add('cm-menu-host');
+    menuHost.appendChild(btn);
   }
 }
 
